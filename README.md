@@ -1,7 +1,9 @@
 # epfix
 
-Renames TV episode files from release names to library names, in place.
-Plans by default; `--apply` to rename.
+Fix episode names in place. No API, no guessing.
+
+Renames TV episode files from release names to library names. Plans by default;
+`--apply` to rename.
 
 ## Install
 
@@ -53,3 +55,7 @@ failure, `2` usage error.
 Conflicts (duplicate target, existing target, invalid output name) abort the
 whole run before any file moves. There is no undo — review the preview before
 `--apply`.
+
+## License
+
+[MIT](LICENSE) © [Nilambar Sharma](https://www.nilambar.net)
