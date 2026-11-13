@@ -1,10 +1,4 @@
-name: release
-
-# Publishes the raw darwin binaries the tap expects
-# (epfix-darwin-arm64, epfix-darwin-amd64) for a v* tag, then bumps
-# ernilambar/homebrew-tap with the tap's own bin/ scripts.
-#
-# Requires a TAP_GITHUB_TOKEN secret with push access to the tap.
+name: Release
 
 on:
   push:
@@ -13,75 +7,28 @@ on:
 permissions:
   contents: write
 
-env:
-  TAP_REPO: ernilambar/homebrew-tap
-  FORMULA: epfix
-  DESC: "Renames TV episode files from release names to library names"
-
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
 
-      - name: Build binaries
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          mkdir -p dist
-          for arch in arm64 amd64; do
-            CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath \
-              -ldflags "-s -w -X main.version=${version}" \
-              -o "dist/${FORMULA}-darwin-${arch}" .
-          done
-          ./dist/${FORMULA}-darwin-arm64 --version | grep -Fq "$version"
-
-      - name: Publish release
+      - name: Build darwin/arm64
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: darwin
+          GOARCH: arm64
+          CGO_ENABLED: 0
         run: |
-          set -euo pipefail
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag \
-              --title "${GITHUB_REF_NAME#v}" --generate-notes
-          fi
-          gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          version="${GITHUB_REF_NAME#v}"
+          go build -ldflags "-s -w -X main.version=${version}" -o dist/epfix-darwin-arm64 .
 
-      - name: Check out tap
-        uses: actions/checkout@v4
+      - name: Attach binary to GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          repository: ${{ env.TAP_REPO }}
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          path: tap
-
-      - name: Update formula
-        working-directory: tap
-        env:
-          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          if [ -f "Formula/${FORMULA}.rb" ]; then
-            bin/release-formula "$FORMULA" "$version"
-          else
-            bin/add-formula "$FORMULA" "ernilambar/epfix" "$version" "$DESC"
-          fi
-
-      - name: Commit formula
-        working-directory: tap
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "Formula/${FORMULA}.rb"
-          if git diff --cached --quiet; then
-            echo "formula already at ${GITHUB_REF_NAME#v}"
-            exit 0
-          fi
-          git commit -m "${FORMULA} ${GITHUB_REF_NAME#v}"
-          git push
+          files: dist/epfix-darwin-arm64
+          generate_release_notes: true

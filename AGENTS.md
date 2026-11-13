@@ -29,11 +29,26 @@ go test -run TestGoldenNames -v ./...   # focused: the golden name table
 ```
 
 `.github/workflows/lint.yml` runs the same format/vet/test/build checks on
-`main` and on pull requests. Releases are tag-driven: pushing `v*` builds
-`epfix-darwin-arm64` and `epfix-darwin-amd64`, publishes them, and bumps
-`ernilambar/homebrew-tap` through that tap's own `bin/add-formula` /
-`bin/release-formula` scripts (secret `TAP_GITHUB_TOKEN`). Do not hand-write a
-formula or a second release path here.
+`main` and on pull requests. `.github/workflows/release.yml` publishes a single
+raw binary, `epfix-darwin-arm64` (`main.version` stamped from the tag), for a
+`v*` tag. macOS on Apple silicon is the only supported platform: do not add an
+amd64 build. Packaging and distribution are handled outside this repository:
+no formula or packaging config belongs here; `README.md` documents installation
+only.
+
+## Releasing
+
+The version is never edited in source: `main.version` defaults to `dev` and the
+git tag supplies the release version (`-X main.version=${GITHUB_REF_NAME#v}` in
+`release.yml`). Cutting a release touches two files:
+
+1. `CHANGELOG.md` — add `## X.Y.Z - YYYY-MM-DD` plus bullets at the top, commit.
+2. The tag — `git tag vX.Y.Z && git push origin vX.Y.Z` builds and publishes
+   `epfix-darwin-arm64`.
+
+Packaging is a separate concern handled outside this repository. Do not
+hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
+`CHANGELOG.md` entry are the only places a release version is written.
 
 ## Conventions
 

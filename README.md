@@ -3,9 +3,40 @@
 Renames TV episode files from release names to library names, in place.
 Plans by default; `--apply` to rename.
 
+## Install
+
+### Homebrew (recommended)
+
+```sh
+brew tap ernilambar/tap
+brew trust ernilambar/tap
+brew install epfix
+```
+
+Upgrade later with `brew upgrade epfix`.
+
+### Prebuilt binary
+
+Download `epfix-darwin-arm64` from the
+[latest release](https://github.com/ernilambar/epfix/releases/latest):
+
+```sh
+curl -L -o epfix https://github.com/ernilambar/epfix/releases/latest/download/epfix-darwin-arm64
+chmod +x epfix
+sudo mv epfix /usr/local/bin/
+```
+
+### From source
+
+Requires Go 1.22+.
+
 ```sh
 go build -o epfix .
+```
 
+## Usage
+
+```sh
 epfix ~/Downloads/Show.S04                     # preview
 epfix --apply ~/Downloads/Show.S04             # rename
 epfix -r --apply --show "Jack Ryan" ~/Media/TV # force the show name
