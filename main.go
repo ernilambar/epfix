@@ -16,6 +16,7 @@ var version = "dev"
 const usageText = `epfix renames TV episode files from release names to library names.
 
 usage: epfix [options] [path ...]
+paths may be directories or video files (default ".")
 
 options:
       --apply            rename files (default: print the plan)
@@ -147,33 +148,133 @@ func parseExts(csv string) ([]string, error) {
 	return out, nil
 }
 
-// dirs returns the directories to scan, defaulting to the working directory.
-func (o options) dirs() ([]string, error) {
+// dirTarget is one path argument after resolution. A whole directory scans
+// every matching video (names nil); a file argument scans exactly the named
+// video, plus the sidecars it owns (names set, keys folded by scopeKey).
+// recursive applies to directory targets only.
+type dirTarget struct {
+	dir       string          // first spelling seen; used in printed paths
+	key       string          // dirKey(dir)
+	names     map[string]bool // nil = every video in dir
+	recursive bool
+}
+
+// explicitFile is a file argument as typed, plus its fileKey.
+type explicitFile struct {
+	path string
+	key  string
+}
+
+// resolution is the resolved invocation: the directories to scan, plus the
+// file arguments, which drive the "nothing to rename" notice even when a
+// directory argument absorbs them.
+type resolution struct {
+	targets  []dirTarget
+	explicit []explicitFile
+}
+
+// targets resolves the path arguments, defaulting to the working directory.
+// Targets in the same directory merge by dirKey: the first spelling seen wins
+// as dir, and a whole directory absorbs file targets in it. Targets below a
+// recursive directory are deduplicated by planPaths, which knows what the
+// walk actually visits.
+func (o options) targets() (resolution, error) {
 	paths := o.paths
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
-	out := make([]string, 0, len(paths))
+	var res resolution
+	byDir := make(map[string]int, len(paths)) // dirKey → index into res.targets
+	seen := make(map[string]bool, len(paths)) // fileKey of explicit files
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
-			return nil, err
+			return resolution{}, err
 		}
+		clean := filepath.Clean(p)
+		dir, name := clean, ""
 		if !info.IsDir() {
-			return nil, fmt.Errorf("%s: not a directory", p)
+			ext := strings.TrimPrefix(filepath.Ext(clean), ".")
+			if !extsContain(o.exts, ext) {
+				return resolution{}, fmt.Errorf("%s: not a video file", p)
+			}
+			dir, name = filepath.Dir(clean), filepath.Base(clean)
 		}
-		out = append(out, filepath.Clean(p))
+		key, err := dirKey(dir)
+		if err != nil {
+			return resolution{}, err
+		}
+		i, ok := byDir[key]
+		if !ok {
+			i = len(res.targets)
+			byDir[key] = i
+			res.targets = append(res.targets, dirTarget{dir: dir, key: key, names: map[string]bool{}})
+		}
+		t := &res.targets[i]
+		if name == "" {
+			t.names = nil // a whole directory absorbs file targets in it
+			t.recursive = o.recursive
+			continue
+		}
+		if fk := key + string(filepath.Separator) + scopeKey(name); !seen[fk] {
+			seen[fk] = true
+			res.explicit = append(res.explicit, explicitFile{path: clean, key: fk})
+		}
+		if t.names != nil {
+			t.names[scopeKey(name)] = true
+		}
 	}
-	return out, nil
+	return res, nil
+}
+
+// dirKey identifies a directory regardless of spelling: relative or absolute,
+// through a symlink, or in a different case (the supported platform has a
+// case-insensitive filesystem). It reads the filesystem but never writes.
+func dirKey(dir string) (string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return scopeKey(real), nil
+}
+
+// fileKey identifies a file by its directory's dirKey and its folded name.
+func fileKey(p string) (string, error) {
+	key, err := dirKey(filepath.Dir(p))
+	if err != nil {
+		return "", err
+	}
+	return key + string(filepath.Separator) + scopeKey(filepath.Base(p)), nil
+}
+
+// scopeKey folds a file name for comparison: the supported platform has a
+// case-insensitive filesystem, so an argument spelled Show.S01E01.mkv must
+// match show.s01e01.mkv on disk.
+func scopeKey(name string) string {
+	return strings.ToLower(name)
+}
+
+func extsContain(exts []string, ext string) bool {
+	ext = strings.ToLower(ext)
+	for _, e := range exts {
+		if e == ext {
+			return true
+		}
+	}
+	return false
 }
 
 func runPlan(opt options, stdout, stderr io.Writer) int {
-	dirs, err := opt.dirs()
+	res, err := opt.targets()
 	if err != nil {
 		fmt.Fprintf(stderr, "epfix: %v\n", err)
 		return 1
 	}
-	plans, err := planPaths(dirs, opt)
+	plans, err := planPaths(res.targets, opt)
 	if err != nil {
 		fmt.Fprintf(stderr, "epfix: %v\n", err)
 		return 1
@@ -184,6 +285,36 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 	for _, dp := range plans {
 		renames = append(renames, dp.renames...)
 		conflicts = append(conflicts, dp.conflicts...)
+	}
+
+	// Explicit file arguments that carry no episode marker (or are already
+	// named correctly) get a notice; they never abort the run. The notice is
+	// driven by the arguments, in the order given, so it survives being
+	// absorbed by a directory argument.
+	if !opt.quiet && len(res.explicit) > 0 {
+		planned := make(map[string]bool, len(renames)+len(conflicts))
+		sources := make([]string, 0, len(renames)+len(conflicts))
+		for _, r := range renames {
+			sources = append(sources, r.Source)
+		}
+		for _, c := range conflicts {
+			if c.source != "" {
+				sources = append(sources, c.source)
+			}
+		}
+		for _, src := range sources {
+			key, err := fileKey(src)
+			if err != nil {
+				fmt.Fprintf(stderr, "epfix: %v\n", err)
+				return 1
+			}
+			planned[key] = true
+		}
+		for _, f := range res.explicit {
+			if !planned[f.key] {
+				fmt.Fprintf(stderr, "epfix: %s: nothing to rename\n", f.path)
+			}
+		}
 	}
 
 	if opt.apply && len(conflicts) == 0 {

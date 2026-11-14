@@ -31,7 +31,7 @@ func TestApply(t *testing.T) {
 		writeFile(t, dir, name)
 	}
 
-	dp, err := planDir(dir, testOptions())
+	dp, err := planDir(dir, nil, testOptions())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestCaseOnlyRename(t *testing.T) {
 
 	o := testOptions()
 	o.show = "show name"
-	dp, err := planDir(dir, o)
+	dp, err := planDir(dir, nil, o)
 	if err != nil {
 		t.Fatal(err)
 	}
