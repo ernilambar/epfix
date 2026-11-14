@@ -116,19 +116,7 @@ func applyDirRenames(renames []rename) ([]rename, error) {
 		}
 		groups[p] = append(groups[p], r)
 	}
-	depth := func(p string) int {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return strings.Count(p, string(filepath.Separator))
-		}
-		return strings.Count(abs, string(filepath.Separator))
-	}
-	sort.Slice(parents, func(i, j int) bool {
-		if di, dj := depth(parents[i]), depth(parents[j]); di != dj {
-			return di > dj
-		}
-		return parents[i] < parents[j]
-	})
+	sortParents(parents)
 	var applied []rename
 	for _, p := range parents {
 		done, err := applyDir(dirPlan{dir: p, renames: groups[p], entriesAreDirs: true})
@@ -138,6 +126,25 @@ func applyDirRenames(renames []rename) ([]rename, error) {
 		}
 	}
 	return applied, nil
+}
+
+// sortParents orders source parents deepest first, so a rename below another
+// planned rename never works with a stale path.
+func sortParents(parents []string) {
+	sort.Slice(parents, func(i, j int) bool {
+		if di, dj := pathDepth(parents[i]), pathDepth(parents[j]); di != dj {
+			return di > dj
+		}
+		return parents[i] < parents[j]
+	})
+}
+
+func pathDepth(p string) int {
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return strings.Count(p, string(filepath.Separator))
+	}
+	return strings.Count(abs, string(filepath.Separator))
 }
 
 // tempName creates a hidden placeholder in dir and returns its path. The caller

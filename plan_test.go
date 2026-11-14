@@ -1156,6 +1156,95 @@ func TestMovieFolderRename(t *testing.T) {
 	})
 }
 
+// TestShowFolderRename: in TV mode a season folder named on the command line is
+// renamed to <title> - S<NN>; inside its show folder it becomes Season NN.
+// Episodes count as their season, and a folder with no season marker or a
+// multi-season range is left alone.
+func TestShowFolderRename(t *testing.T) {
+	root := t.TempDir()
+	dir := func(name string) string {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	plan := func(t *testing.T, dir string, o options) ([]rename, []conflict) {
+		t.Helper()
+		renames, conflicts, err := planShowFolders([]dirTarget{{dir: dir}}, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return renames, conflicts
+	}
+
+	t.Run("season pack", func(t *testing.T) {
+		renames, conflicts := plan(t, dir("Show.Name.S04.1080p.WEB-DL-GROUP"), testOptions())
+		if len(conflicts) != 0 || len(renames) != 1 {
+			t.Fatalf("want one rename, got %+v %+v", renames, conflicts)
+		}
+		want := filepath.Join(root, "Show Name - S04")
+		if renames[0].Target != want {
+			t.Fatalf("want %q, got %q", want, renames[0].Target)
+		}
+	})
+
+	t.Run("episode folder counts as its season", func(t *testing.T) {
+		renames, _ := plan(t, dir("Show.Name.S01E05.1080p"), testOptions())
+		want := filepath.Join(root, "Show Name - S01")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("season word", func(t *testing.T) {
+		renames, _ := plan(t, dir("Show.Name.Season.3.Complete"), testOptions())
+		want := filepath.Join(root, "Show Name - S03")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("pure season folder stays in place", func(t *testing.T) {
+		show := dir("Show Name")
+		renames, _ := plan(t, dir(filepath.Join("Show Name", "S04")), testOptions())
+		want := filepath.Join(show, "Season 04")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("no season marker skipped", func(t *testing.T) {
+		if renames, conflicts := plan(t, dir("Plain.Show.1080p.WEB-DL"), testOptions()); len(renames) != 0 || len(conflicts) != 0 {
+			t.Fatalf("want nothing, got %+v %+v", renames, conflicts)
+		}
+	})
+
+	t.Run("season range skipped", func(t *testing.T) {
+		if renames, conflicts := plan(t, dir("Other.Show.S01-S05.1080p"), testOptions()); len(renames) != 0 || len(conflicts) != 0 {
+			t.Fatalf("want nothing, got %+v %+v", renames, conflicts)
+		}
+	})
+
+	t.Run("title and season override", func(t *testing.T) {
+		o := testOptions()
+		o.title, o.season, o.seasonSet = "Forced", 7, true
+		renames, _ := plan(t, dir("Show.Name.S04.1080p"), o)
+		want := filepath.Join(root, "Forced - S07")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("existing season is a conflict", func(t *testing.T) {
+		dir("Show Name - S04")
+		renames, conflicts := plan(t, dir("Show.Name.S04.1080p"), testOptions())
+		if len(renames) != 0 || len(conflicts) != 1 || conflicts[0].Reason != "target exists" {
+			t.Fatalf("want one target-exists conflict, got %+v %+v", renames, conflicts)
+		}
+	})
+}
+
 // TestMovieFolderConflict: an existing folder at the target aborts the run,
 // so neither the folder nor the files inside it move.
 func TestMovieFolderConflict(t *testing.T) {

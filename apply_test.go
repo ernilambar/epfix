@@ -204,6 +204,46 @@ func TestApplyMovieFolder(t *testing.T) {
 	}
 }
 
+// TestApplyShowFolder proves a season pack is renamed in place after its files
+// are renamed.
+func TestApplyShowFolder(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Show.Name.S04.1080p.WEB-DL-GROUP")
+	writeFile(t, dir, "Show.Name.S04E01.1080p.WEB-DL-GROUP.mkv")
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--apply", dir}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	want := filepath.Join(root, "Show Name - S04", "Show Name - S04E01.mkv")
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("season folder not renamed: %v", err)
+	}
+	if got := names(t, root); len(got) != 1 || got[0] != "Show Name - S04" {
+		t.Fatalf("root: %v", got)
+	}
+}
+
+// TestApplyShowFolderExistingShowTree leaves an existing show/season tree alone
+// and renames the release folder beside it.
+func TestApplyShowFolderExistingShowTree(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "Show Name", "Season 01"), "Show.Name.S01E01.mkv")
+	dir := filepath.Join(root, "Show.Name.S02.1080p")
+	writeFile(t, dir, "Show.Name.S02E01.mkv")
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--apply", dir}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	if _, err := os.Stat(filepath.Join(root, "Show Name - S02", "Show Name - S02E01.mkv")); err != nil {
+		t.Fatalf("season file not renamed into place: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "Show Name", "Season 01", "Show.Name.S01E01.mkv")); err != nil {
+		t.Fatalf("existing show tree changed: %v", err)
+	}
+}
+
 func TestCaseOnlyRename(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "Show Name - S04E01.mkv")
