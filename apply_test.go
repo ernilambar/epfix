@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -92,6 +93,88 @@ func TestApplySwap(t *testing.T) {
 		if string(body) != want {
 			t.Fatalf("%s: want %q, got %q", name, want, body)
 		}
+	}
+}
+
+// TestApplyRollback proves a failed move is undone: the source comes back and
+// no temporary file is left behind.
+func TestApplyRollback(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "a.txt")
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("A"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A directory at the target makes the move fail after staging.
+	if err := os.Mkdir(filepath.Join(dir, "taken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dp := dirPlan{dir: dir, renames: []rename{
+		{Source: filepath.Join(dir, "a.txt"), Target: filepath.Join(dir, "taken")},
+	}}
+	applied, err := applyDir(dp)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if len(applied) != 0 {
+		t.Fatalf("want nothing applied, got %d", len(applied))
+	}
+	if strings.Contains(err.Error(), "not restored") {
+		t.Fatalf("rollback should have succeeded: %v", err)
+	}
+	body, readErr := os.ReadFile(filepath.Join(dir, "a.txt"))
+	if readErr != nil {
+		t.Fatalf("source not restored: %v", readErr)
+	}
+	if string(body) != "A" {
+		t.Fatalf("content not preserved: %q", body)
+	}
+	if got := names(t, dir); len(got) != 2 || got[0] != "a.txt" || got[1] != "taken" {
+		t.Fatalf("temporary file left behind: %v", got)
+	}
+}
+
+// TestApplyRollbackLeftover proves a rolled-back file whose source name is
+// taken is reported with its temporary path instead of overwriting the
+// occupant or vanishing from the report.
+func TestApplyRollbackLeftover(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{"a.txt": "A", "b.txt": "B"} {
+		writeFile(t, dir, name)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "taken"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// a→b succeeds, b→taken fails, and b is then occupied, so b's file cannot
+	// be put back.
+	dp := dirPlan{dir: dir, renames: []rename{
+		{Source: filepath.Join(dir, "a.txt"), Target: filepath.Join(dir, "b.txt")},
+		{Source: filepath.Join(dir, "b.txt"), Target: filepath.Join(dir, "taken")},
+	}}
+	applied, err := applyDir(dp)
+	if err == nil {
+		t.Fatal("want error")
+	}
+	if len(applied) != 1 {
+		t.Fatalf("want one applied, got %d", len(applied))
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "not restored") || !strings.Contains(msg, ".epfix-tmp-") || !strings.Contains(msg, "b.txt") {
+		t.Fatalf("leftover not reported: %v", err)
+	}
+	// The occupant survives, and the stranded file is still readable at the
+	// temporary path named in the message.
+	body, readErr := os.ReadFile(filepath.Join(dir, "b.txt"))
+	if readErr != nil || string(body) != "A" {
+		t.Fatalf("occupant changed: %q %v", body, readErr)
+	}
+	tmp := msg[strings.Index(msg, ".epfix-tmp-"):]
+	tmp = filepath.Join(dir, strings.Fields(tmp)[0])
+	body, readErr = os.ReadFile(tmp)
+	if readErr != nil || string(body) != "B" {
+		t.Fatalf("stranded file unreadable: %q %v", body, readErr)
 	}
 }
 

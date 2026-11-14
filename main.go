@@ -25,11 +25,12 @@ options:
       --template text        output name template (default "{title} - S{season}E{episode}",
                              with --movies "{title} ({year})")
       --title text           force the title (series name, or movie title with --movies)
-      --season int           force the season number (TV mode)
+      --season int           force the season number, zero or positive (TV mode)
   -r, --recursive            recurse into subdirectories
       --sidecars             rename sidecar files (default)
       --no-sidecars          leave sidecar files alone
-      --ext list             video extensions (default "mkv,mp4,m4v,avi,mov,ts,webm")
+      --ext list             comma-separated video extensions, given once
+                             (default "mkv,mp4,m4v,avi,mov,ts,webm")
   -q, --quiet                print the summary only
       --version              print the version
   -h, --help                 print this help
@@ -79,6 +80,25 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runPlan(opt, stdout, stderr)
 }
 
+// extFlag is the --ext value. The flag carries one comma-separated list, and a
+// repeat is an error: a second value would silently discard the first and turn
+// the run into a no-op.
+type extFlag struct {
+	list     string
+	set      bool
+	repeated bool
+}
+
+func (e *extFlag) String() string { return e.list }
+
+func (e *extFlag) Set(v string) error {
+	if e.set {
+		e.repeated = true
+	}
+	e.set, e.list = true, v
+	return nil
+}
+
 func parseOptions(args []string) (options, error) {
 	opt := options{
 		maxYear:  time.Now().Year() + 1,
@@ -88,19 +108,19 @@ func parseOptions(args []string) (options, error) {
 	fs := flag.NewFlagSet("epfix", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
-	season := -1
-	var extCSV string
+	season := 0
+	exts := extFlag{list: strings.Join(defaultExts(), ",")}
 	var noSidecars bool
 	fs.BoolVar(&opt.apply, "apply", false, "")
 	fs.BoolVar(&opt.movies, "movies", false, "")
 	fs.StringVar(&opt.template, "template", "", "")
 	fs.StringVar(&opt.title, "title", "", "")
-	fs.IntVar(&season, "season", -1, "")
+	fs.IntVar(&season, "season", 0, "")
 	fs.BoolVar(&opt.recursive, "recursive", false, "")
 	fs.BoolVar(&opt.recursive, "r", false, "")
 	fs.BoolVar(&opt.sidecars, "sidecars", true, "")
 	fs.BoolVar(&noSidecars, "no-sidecars", false, "")
-	fs.StringVar(&extCSV, "ext", strings.Join(defaultExts(), ","), "")
+	fs.Var(&exts, "ext", "")
 	fs.BoolVar(&opt.quiet, "quiet", false, "")
 	fs.BoolVar(&opt.quiet, "q", false, "")
 	fs.BoolVar(&opt.version, "version", false, "")
@@ -121,24 +141,36 @@ func parseOptions(args []string) (options, error) {
 		rest = fs.Args()[1:]
 	}
 
-	if season < -1 {
-		return opt, fmt.Errorf("invalid season %d", season)
-	}
-	if season >= 0 {
+	// Visit reports every flag given, so an explicit --season 0 is told apart
+	// from the default and a negative season is rejected instead of ignored.
+	templateSet, seasonGiven := false, false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "template":
+			templateSet = true
+		case "season":
+			seasonGiven = true
+		}
+	})
+	if seasonGiven {
+		if season < 0 {
+			return opt, fmt.Errorf("invalid season %d: must be zero or positive", season)
+		}
 		opt.season = season
 		opt.seasonSet = true
 	}
+	if exts.repeated {
+		return opt, errors.New("--ext may be given only once: pass a comma-separated list")
+	}
 	opt.sidecars = opt.sidecars && !noSidecars
-	exts, err := parseExts(extCSV)
+	extList, err := parseExts(exts.list)
 	if err != nil {
 		return opt, err
 	}
-	opt.exts = exts
+	opt.exts = extList
 
 	// The template vocabulary belongs to the mode, so one --template serves
 	// both: TV tokens for episodes, movie tokens for movies.
-	templateSet := false
-	fs.Visit(func(f *flag.Flag) { templateSet = templateSet || f.Name == "template" })
 	allowed := []string{"title", "season", "episode"}
 	if opt.movies {
 		if opt.seasonSet {
@@ -351,9 +383,11 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 			done, err := applyDir(dp)
 			applied = append(applied, done...)
 			if err != nil {
-				printResult(stdout, applied, nil, true, opt)
-				fmt.Fprintf(stderr, "epfix: %s: %v\n", dp.dir, err)
-				fmt.Fprintf(stderr, "epfix: %d of %d renames applied\n", len(applied), len(renames))
+				fmt.Fprintf(stderr, "epfix: %v\n", err)
+				fmt.Fprintf(stderr, "epfix: %d of %d renames applied; the rest were left in place\n", len(applied), len(renames))
+				if !opt.quiet {
+					printRenames(stdout, applied)
+				}
 				return 1
 			}
 		}
@@ -369,17 +403,8 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 }
 
 func printResult(w io.Writer, renames []rename, conflicts []conflict, applied bool, opt options) {
-	if !opt.quiet && len(renames) > 0 {
-		width := 0
-		for _, r := range renames {
-			if n := len(r.Source); n > width {
-				width = n
-			}
-		}
-		for _, r := range renames {
-			fmt.Fprintf(w, "%-*s  →  %s\n", width, r.Source, r.Target)
-		}
-		fmt.Fprintln(w)
+	if !opt.quiet {
+		printRenames(w, renames)
 	}
 	fmt.Fprintf(w, "%d %s, %d %s\n", len(renames), plural(len(renames), "rename"), len(conflicts), plural(len(conflicts), "conflict"))
 	for _, c := range conflicts {
@@ -388,6 +413,24 @@ func printResult(w io.Writer, renames []rename, conflicts []conflict, applied bo
 	if !opt.quiet && !applied && len(renames) > 0 && len(conflicts) == 0 {
 		fmt.Fprintf(w, "\n(dry run — pass --apply to rename)\n")
 	}
+}
+
+// printRenames lists one rename per line, source column padded to the widest
+// source.
+func printRenames(w io.Writer, renames []rename) {
+	if len(renames) == 0 {
+		return
+	}
+	width := 0
+	for _, r := range renames {
+		if n := len(r.Source); n > width {
+			width = n
+		}
+	}
+	for _, r := range renames {
+		fmt.Fprintf(w, "%-*s  →  %s\n", width, r.Source, r.Target)
+	}
+	fmt.Fprintln(w)
 }
 
 func plural(n int, word string) string {

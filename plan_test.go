@@ -444,6 +444,35 @@ func TestApplyAbortsOnConflict(t *testing.T) {
 	}
 }
 
+// TestApplyFailureOutput proves a failed apply reports the error and the
+// applied count on stderr, and prints no summary that claims nothing was
+// planned.
+func TestApplyFailureOutput(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores a read-only directory")
+	}
+	dir := t.TempDir()
+	writeFile(t, dir, "Show.S01E01.1080p.mkv")
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o755) // let t.TempDir clean up
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--apply", dir}, &out, &errOut); code != 1 {
+		t.Fatalf("want exit 1, got %d (%s)", code, errOut.String())
+	}
+	if got := errOut.String(); !strings.Contains(got, "0 of 1 renames applied") {
+		t.Fatalf("failure not reported: %q", got)
+	}
+	if got := out.String(); strings.Contains(got, "0 renames") {
+		t.Fatalf("misleading summary after failure: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "Show.S01E01.1080p.mkv")); err != nil {
+		t.Fatalf("source was touched: %v", err)
+	}
+}
+
 func TestParseOptions(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -457,6 +486,8 @@ func TestParseOptions(t *testing.T) {
 		{name: "empty template", args: []string{"--template", ""}, wantErr: true},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: true},
 		{name: "negative season", args: []string{"--season", "-5"}, wantErr: true},
+		{name: "minus one season", args: []string{"--season", "-1"}, wantErr: true},
+		{name: "repeated ext", args: []string{"--ext", "mkv", "--ext", "mp4"}, wantErr: true},
 		{name: "empty ext", args: []string{"--ext", " , "}, wantErr: true},
 		{name: "flags after path", args: []string{"dir", "--apply"}, check: func(t *testing.T, o options) {
 			if !o.apply || len(o.paths) != 1 || o.paths[0] != "dir" {
