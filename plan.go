@@ -34,6 +34,10 @@ type dirPlan struct {
 	dir       string
 	renames   []rename
 	conflicts []conflict
+	// entriesAreDirs marks a synthetic plan whose sources are directories
+	// (movie folder renames), so applyDir stages each one as a directory
+	// rather than a file.
+	entriesAreDirs bool
 }
 
 var (
@@ -508,6 +512,70 @@ func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 		plans = append(plans, dp)
 	}
 	return plans, nil
+}
+
+// planMovieFolders plans the movie folders named directly on the command line.
+// A whole-directory target is renamed with the movie template when its own
+// base name looks like a release name, so "All We Imagine As Light (2024)
+// [720p] [BluRay] [YTS.MX]" becomes "All We Imagine As Light (2024)". Files
+// inside are planned by planDir; a nested directory is never renamed, because
+// only the arguments themselves name their folder. It never writes.
+func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, error) {
+	if !o.movies {
+		return nil, nil, nil
+	}
+	var renames []rename
+	var conflicts []conflict
+	for _, t := range targets {
+		if t.names != nil {
+			continue // a file argument's directory is not renamed
+		}
+		src := filepath.Clean(t.dir)
+		base := filepath.Base(src)
+		m, ok := detectMovie(base, o.maxYear)
+		if !ok {
+			continue
+		}
+		title := m.title
+		if o.title != "" {
+			title = o.title
+		}
+		name := renderMovie(o.template, title, m.year)
+		if name == base {
+			continue
+		}
+		if reason := invalidTarget(name); reason != "" {
+			conflicts = append(conflicts, conflict{Reason: reason, detail: name, source: src})
+			continue
+		}
+		renames = append(renames, rename{Source: src, Target: filepath.Join(filepath.Dir(src), name)})
+	}
+
+	sources := make(map[string]bool, len(renames))
+	for _, r := range renames {
+		sources[scopeKey(r.Source)] = true
+	}
+	seen := make(map[string]bool, len(renames))
+	kept := renames[:0]
+	for _, r := range renames {
+		key := scopeKey(r.Target)
+		if seen[key] {
+			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
+			continue
+		}
+		seen[key] = true
+		if !strings.EqualFold(r.Target, r.Source) && !sources[key] {
+			switch _, err := os.Lstat(r.Target); {
+			case err == nil:
+				conflicts = append(conflicts, conflict{Reason: "target exists", detail: filepath.Base(r.Target), source: r.Source})
+				continue
+			case !errors.Is(err, fs.ErrNotExist):
+				return nil, nil, err
+			}
+		}
+		kept = append(kept, r)
+	}
+	return kept, conflicts, nil
 }
 
 // planDir scans one directory. names is the scope: nil plans every video in

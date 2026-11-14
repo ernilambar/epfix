@@ -18,6 +18,8 @@ const usageText = `epfix renames TV episode and movie files from release names t
 
 usage: epfix [options] [path ...]
 paths may be directories or video files (default ".")
+with --movies, a directory argument whose own name looks like a release name
+is renamed too.
 
 options:
       --apply                rename files (default: print the plan)
@@ -339,6 +341,11 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "epfix: %v\n", err)
 		return 1
 	}
+	folderRenames, folderConflicts, err := planMovieFolders(res.targets, opt)
+	if err != nil {
+		fmt.Fprintf(stderr, "epfix: %v\n", err)
+		return 1
+	}
 
 	var renames []rename
 	var conflicts []conflict
@@ -346,6 +353,8 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 		renames = append(renames, dp.renames...)
 		conflicts = append(conflicts, dp.conflicts...)
 	}
+	renames = append(renames, folderRenames...)
+	conflicts = append(conflicts, folderConflicts...)
 
 	// Explicit file arguments that carry no episode marker (or are already
 	// named correctly) get a notice; they never abort the run. The notice is
@@ -378,18 +387,14 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 	}
 
 	if opt.apply && len(conflicts) == 0 {
-		var applied []rename
-		for _, dp := range plans {
-			done, err := applyDir(dp)
-			applied = append(applied, done...)
-			if err != nil {
-				fmt.Fprintf(stderr, "epfix: %v\n", err)
-				fmt.Fprintf(stderr, "epfix: %d of %d renames applied; the rest were left in place\n", len(applied), len(renames))
-				if !opt.quiet {
-					printRenames(stdout, applied)
-				}
-				return 1
+		applied, err := applyAll(plans, folderRenames)
+		if err != nil {
+			fmt.Fprintf(stderr, "epfix: %v\n", err)
+			fmt.Fprintf(stderr, "epfix: %d of %d renames applied; the rest were left in place\n", len(applied), len(renames))
+			if !opt.quiet {
+				printRenames(stdout, applied)
 			}
+			return 1
 		}
 		printResult(stdout, applied, nil, true, opt)
 		return 0
@@ -400,6 +405,21 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// applyAll applies the file plans first, then the folder renames: a folder
+// rename would otherwise invalidate the sources and targets planned inside it.
+func applyAll(plans []dirPlan, folders []rename) ([]rename, error) {
+	var applied []rename
+	for _, dp := range plans {
+		done, err := applyDir(dp)
+		applied = append(applied, done...)
+		if err != nil {
+			return applied, err
+		}
+	}
+	done, err := applyDirRenames(folders)
+	return append(applied, done...), err
 }
 
 func printResult(w io.Writer, renames []rename, conflicts []conflict, applied bool, opt options) {

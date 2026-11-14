@@ -3,7 +3,8 @@
 Fix episode and movie names in place. No API, no network.
 
 Renames TV episode and movie files from release names to library names. Plans by
-default; `--apply` to rename. Movie detection is opt-in with `--movies`.
+default; `--apply` to rename. Movie detection is opt-in with `--movies`, which
+also renames the movie folder when the folder itself is the path argument.
 
 ## Install
 
@@ -44,11 +45,16 @@ epfix --apply ~/Downloads/Show.S04              # rename
 epfix -r --apply --title "Jack Ryan" ~/Media/TV # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies --apply ~/Downloads/Movies       # rename movies
+epfix --movies --apply "~/Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+                                                # rename the folder and its file
 ```
 
 - Episodes (`SxxEyy`, `1x02`) become `{title} - S{season}E{episode}`.
 - With `--movies`, movies become `{title} ({year})`, or `{title}` without a
   year. Episodes are left alone in this mode.
+- With `--movies`, a directory named as a path argument is renamed with the
+  same template when its own name looks like a release name. Only arguments are
+  renamed, not nested folders. Files inside are renamed first.
 - Sidecars such as subtitles are renamed with their video.
 - Any conflict aborts the whole run before a file moves. There is no undo, so
   review the preview before `--apply`.

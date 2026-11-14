@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"sort"
@@ -175,6 +176,31 @@ func TestApplyRollbackLeftover(t *testing.T) {
 	body, readErr = os.ReadFile(tmp)
 	if readErr != nil || string(body) != "B" {
 		t.Fatalf("stranded file unreadable: %q %v", body, readErr)
+	}
+}
+
+// TestApplyMovieFolder proves the pipeline order: files are renamed inside the
+// folder first, then the folder is renamed, leaving one canonical path.
+func TestApplyMovieFolder(t *testing.T) {
+	root := t.TempDir()
+	const folder = "All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+	dir := filepath.Join(root, folder)
+	writeFile(t, dir, "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--movies", "--apply", dir}, &out, &errOut); code != 0 {
+		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+	}
+	wantDir := filepath.Join(root, "All We Imagine As Light (2024)")
+	body, err := os.ReadFile(filepath.Join(wantDir, "All We Imagine As Light (2024).mp4"))
+	if err != nil {
+		t.Fatalf("folder or file not renamed: %v", err)
+	}
+	if string(body) != "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4" {
+		t.Fatalf("content not preserved: %q", body)
+	}
+	if got := names(t, root); len(got) != 1 || got[0] != filepath.Base(wantDir) {
+		t.Fatalf("temporary entry or old folder left behind: %v", got)
 	}
 }
 
