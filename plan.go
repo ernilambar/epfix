@@ -17,10 +17,13 @@ type rename struct {
 	Target string
 }
 
-// conflict explains why a plan cannot be applied. detail is only for humans.
+// conflict explains why a plan cannot be applied. detail is only for humans;
+// source is the planned source that cannot move, empty when a conflict belongs
+// to no single file.
 type conflict struct {
 	Reason string
 	detail string
+	source string
 }
 
 // dirPlan is the complete plan for one directory.
@@ -156,29 +159,38 @@ func invalidTarget(name string) string {
 	return ""
 }
 
-// planPaths plans every directory named by the invocation.
-func planPaths(dirs []string, o options) ([]dirPlan, error) {
+// planPaths plans every target named by the invocation. Recursive targets go
+// first, and a directory is planned at most once: a later target in a
+// directory a walk already visited is skipped, and a walk that reaches a
+// planned directory skips its subtree (the earlier walk covered it). Hidden
+// and symlinked directories, which a walk never enters, keep their own
+// targets.
+func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 	var plans []dirPlan
-	for _, dir := range dirs {
-		if !o.recursive {
-			dp, err := planDir(dir, o)
-			if err != nil {
-				return nil, err
-			}
-			plans = append(plans, dp)
+	planned := make(map[string]bool)
+	for _, t := range targets {
+		if !t.recursive {
 			continue
 		}
-		err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		err := filepath.WalkDir(t.dir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if !d.IsDir() {
 				return nil
 			}
-			if path != dir && strings.HasPrefix(d.Name(), ".") {
+			if path != t.dir && strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
 			}
-			dp, err := planDir(path, o)
+			key, err := dirKey(path)
+			if err != nil {
+				return err
+			}
+			if planned[key] {
+				return fs.SkipDir
+			}
+			planned[key] = true
+			dp, err := planDir(path, nil, o)
 			if err != nil {
 				return err
 			}
@@ -191,11 +203,23 @@ func planPaths(dirs []string, o options) ([]dirPlan, error) {
 			return nil, err
 		}
 	}
+	for _, t := range targets {
+		if t.recursive || planned[t.key] {
+			continue
+		}
+		dp, err := planDir(t.dir, t.names, o)
+		if err != nil {
+			return nil, err
+		}
+		plans = append(plans, dp)
+	}
 	return plans, nil
 }
 
-// planDir scans one directory. It never touches the filesystem.
-func planDir(dir string, o options) (dirPlan, error) {
+// planDir scans one directory. names is the scope: nil plans every video in
+// the directory, a non-nil set plans only the named videos (keys folded by
+// scopeKey). It never touches the filesystem.
+func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 	dp := dirPlan{dir: dir}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -233,7 +257,12 @@ func planDir(dir string, o options) (dirPlan, error) {
 		rest = append(rest, name)
 	}
 
-	var kept []video
+	// Render the target of every video in the directory, collecting the ones
+	// that can be renamed plus the conflicts of the ones that cannot. Rendering
+	// out-of-scope videos as well keeps the scope filter from changing how a
+	// shared sidecar or a shared target is decided.
+	var detected []video
+	var invalid []conflict
 	dirShow := ""
 	for _, v := range videos {
 		info, ok := detect(v.stem)
@@ -256,18 +285,21 @@ func planDir(dir string, o options) (dirPlan, error) {
 		}
 		v.target = renderTemplate(o.template, show, season, info.episodes)
 		if reason := invalidTarget(v.target); reason != "" {
-			dp.conflicts = append(dp.conflicts, conflict{Reason: reason, detail: v.target})
+			invalid = append(invalid, conflict{Reason: reason, detail: v.target, source: filepath.Join(dir, v.name)})
 			continue
 		}
-		kept = append(kept, v)
+		detected = append(detected, v)
 	}
 
-	// Sidecars are files that share a video's stem, matched by the longest stem.
+	// Sidecars are files that share a video's stem, matched by the longest
+	// stem. Matched against every detected video, before the scope filter:
+	// filtering first would let an in-scope Show.S01E01.mkv steal
+	// Show.S01E01.720p.srt from an out-of-scope Show.S01E01.720p.mkv.
 	sidecars := map[string][]string{}
 	if o.sidecars {
 		for _, name := range rest {
 			best := ""
-			for _, v := range kept {
+			for _, v := range detected {
 				if len(name) > len(v.stem) && strings.HasPrefix(name, v.stem) && name[len(v.stem)] == '.' && len(v.stem) > len(best) {
 					best = v.stem
 				}
@@ -275,6 +307,25 @@ func planDir(dir string, o options) (dirPlan, error) {
 			if best != "" {
 				sidecars[best] = append(sidecars[best], name)
 			}
+		}
+	}
+
+	// Apply the scope: drop out-of-scope videos, their sidecars, and their
+	// conflicts. An out-of-scope sibling must not abort the run.
+	inScope := func(v video) bool {
+		return names == nil || names[scopeKey(v.name)]
+	}
+	var kept []video
+	for _, v := range detected {
+		if !inScope(v) {
+			delete(sidecars, v.stem)
+			continue
+		}
+		kept = append(kept, v)
+	}
+	for _, c := range invalid {
+		if names == nil || names[scopeKey(filepath.Base(c.source))] {
+			dp.conflicts = append(dp.conflicts, c)
 		}
 	}
 
@@ -299,14 +350,14 @@ func planDir(dir string, o options) (dirPlan, error) {
 
 	sources := make(map[string]bool, len(dp.renames))
 	for _, r := range dp.renames {
-		sources[strings.ToLower(filepath.Base(r.Source))] = true
+		sources[scopeKey(filepath.Base(r.Source))] = true
 	}
 	seen := make(map[string]bool, len(dp.renames))
 	for _, r := range dp.renames {
 		base := filepath.Base(r.Target)
-		key := strings.ToLower(base)
+		key := scopeKey(base)
 		if seen[key] {
-			dp.conflicts = append(dp.conflicts, conflict{Reason: "duplicate target", detail: base})
+			dp.conflicts = append(dp.conflicts, conflict{Reason: "duplicate target", detail: base, source: r.Source})
 			continue
 		}
 		seen[key] = true
@@ -316,7 +367,7 @@ func planDir(dir string, o options) (dirPlan, error) {
 		}
 		switch _, err := os.Lstat(r.Target); {
 		case err == nil:
-			dp.conflicts = append(dp.conflicts, conflict{Reason: "target exists", detail: base})
+			dp.conflicts = append(dp.conflicts, conflict{Reason: "target exists", detail: base, source: r.Source})
 		case !errors.Is(err, fs.ErrNotExist):
 			return dp, err
 		}
