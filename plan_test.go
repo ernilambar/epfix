@@ -228,6 +228,15 @@ func TestGoldenMovieNames(t *testing.T) {
 			want:  []string{"Movie 2028.mkv"},
 		},
 		{
+			name:  "sample skipped",
+			files: []string{"Movie.2020.1080p.mkv", "Movie.2020.1080p.sample.mkv", "Movie.2020.1080p-Sample.mkv"},
+			want:  []string{"Movie (2020).mkv"},
+		},
+		{
+			name:  "trailer skipped",
+			files: []string{"Movie.Name.2020.trailer.mkv", "Movie.Name.Trailer.1080p.mkv"},
+		},
+		{
 			name:  "already renamed",
 			files: []string{"Jailer 2 (2026).mkv"},
 		},

@@ -59,7 +59,10 @@ var (
 	movieSeasonRe  = regexp.MustCompile(`(?i)\b(?:season\s?[0-9]{1,2}|s[0-9]{1,2})\b`)
 	movieEpisodeRe = regexp.MustCompile(`(?i)\b(?:ep|episode|e)\s?[0-9]{1,4}\b`)
 	movieAnimeRe   = regexp.MustCompile(`(?i)\s[-–]\s?[0-9]{1,4}$`)
-	emptyPairRe    = regexp.MustCompile(`\s*(?:\(\s*\)|\[\s*\])`)
+	// movieExtraRe marks a sample or trailer, which would otherwise take the
+	// movie's own name and collide with it.
+	movieExtraRe = regexp.MustCompile(`(?i)\b(?:sample|trailer)\b`)
+	emptyPairRe  = regexp.MustCompile(`\s*(?:\(\s*\)|\[\s*\])`)
 )
 
 const (
@@ -158,7 +161,7 @@ type movieInfo struct {
 func detectMovie(stem string, maxYear int) (movieInfo, bool) {
 	s := strings.TrimSpace(siteTagRe.ReplaceAllString(stem, ""))
 	s = strings.TrimSpace(groupTagRe.ReplaceAllString(s, ""))
-	if s == "" {
+	if s == "" || movieExtraRe.MatchString(s) {
 		return movieInfo{}, false
 	}
 
