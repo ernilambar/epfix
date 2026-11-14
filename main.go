@@ -8,28 +8,31 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // version is set at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
-const usageText = `epfix renames TV episode files from release names to library names.
+const usageText = `epfix renames TV episode and movie files from release names to library names.
 
 usage: epfix [options] [path ...]
 paths may be directories or video files (default ".")
 
 options:
-      --apply            rename files (default: print the plan)
-      --template text    output name template (default "{show} - S{season}E{episode}")
-      --show text        force the show name
-      --season int       force the season number
-  -r, --recursive        recurse into subdirectories
-      --sidecars         rename sidecar files (default)
-      --no-sidecars      leave sidecar files alone
-      --ext list         video extensions (default "mkv,mp4,m4v,avi,mov,ts,webm")
-  -q, --quiet            print the summary only
-      --version          print the version
-  -h, --help             print this help
+      --apply                rename files (default: print the plan)
+      --movies               rename movies instead of TV episodes
+      --template text        output name template (default "{show} - S{season}E{episode}",
+                             with --movies "{title} ({year})")
+      --show text            force the show name (TV mode)
+      --season int           force the season number (TV mode)
+  -r, --recursive            recurse into subdirectories
+      --sidecars             rename sidecar files (default)
+      --no-sidecars          leave sidecar files alone
+      --ext list             video extensions (default "mkv,mp4,m4v,avi,mov,ts,webm")
+  -q, --quiet                print the summary only
+      --version              print the version
+  -h, --help                 print this help
 
 exit codes: 0 success or clean plan, 1 conflicts or rename failure, 2 usage error.
 `
@@ -37,6 +40,8 @@ exit codes: 0 success or clean plan, 1 conflicts or rename failure, 2 usage erro
 type options struct {
 	apply     bool
 	template  string
+	movies    bool
+	maxYear   int // movie year ceiling: time.Now().Year()+1
 	show      string
 	season    int
 	seasonSet bool
@@ -75,7 +80,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func parseOptions(args []string) (options, error) {
-	opt := options{template: defaultTemplate, sidecars: true, exts: defaultExts()}
+	opt := options{
+		maxYear:  time.Now().Year() + 1,
+		sidecars: true,
+		exts:     defaultExts(),
+	}
 	fs := flag.NewFlagSet("epfix", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -83,7 +92,8 @@ func parseOptions(args []string) (options, error) {
 	var extCSV string
 	var noSidecars bool
 	fs.BoolVar(&opt.apply, "apply", false, "")
-	fs.StringVar(&opt.template, "template", defaultTemplate, "")
+	fs.BoolVar(&opt.movies, "movies", false, "")
+	fs.StringVar(&opt.template, "template", "", "")
 	fs.StringVar(&opt.show, "show", "", "")
 	fs.IntVar(&season, "season", -1, "")
 	fs.BoolVar(&opt.recursive, "recursive", false, "")
@@ -124,7 +134,28 @@ func parseOptions(args []string) (options, error) {
 		return opt, err
 	}
 	opt.exts = exts
-	if err := validateTemplate(opt.template); err != nil {
+
+	// The template vocabulary belongs to the mode, so one --template serves
+	// both: TV tokens for episodes, movie tokens for movies.
+	templateSet := false
+	fs.Visit(func(f *flag.Flag) { templateSet = templateSet || f.Name == "template" })
+	allowed := []string{"show", "season", "episode"}
+	if opt.movies {
+		if opt.show != "" {
+			return opt, errors.New("--show cannot be used with --movies")
+		}
+		if opt.seasonSet {
+			return opt, errors.New("--season cannot be used with --movies")
+		}
+		allowed = []string{"title", "year"}
+	}
+	if !templateSet {
+		opt.template = defaultTemplate
+		if opt.movies {
+			opt.template = defaultMovieTemplate
+		}
+	}
+	if err := validateTemplate(opt.template, allowed...); err != nil {
 		return opt, err
 	}
 	return opt, nil
