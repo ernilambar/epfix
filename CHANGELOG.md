@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 - 2026-11-14
 - Rename movie folders named as path arguments in `--movies` mode
 - Rename TV season folders named as path arguments to `Show Name - S01`
 
