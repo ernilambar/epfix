@@ -70,10 +70,10 @@ func TestGoldenNames(t *testing.T) {
 		{name: "resolution", file: "Show.1920x1080.mkv", want: ""},
 		{name: "glued marker", file: "ShowS04E01.mkv", want: ""},
 		{name: "three digit season", file: "Show.S104E01.mkv", want: ""},
-		{name: "forced show", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.show = "Jack Ryan" }, want: "Jack Ryan - S04E01.mkv"},
+		{name: "forced title", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.title = "Jack Ryan" }, want: "Jack Ryan - S04E01.mkv"},
 		{name: "forced season", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.season, o.seasonSet = 2, true }, want: "Show Name - S02E01.mkv"},
 		{name: "custom template", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) {
-			o.template = "{show} S{season}E{episode}"
+			o.template = "{title} S{season}E{episode}"
 		}, want: "Show Name S04E01.mkv"},
 		{name: "dir fallback", sub: "Some Show", file: "S01E01.mkv", want: "Some Show - S01E01.mkv"},
 		{name: "season folder fallback", sub: filepath.Join("Some Show", "Season 04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
@@ -396,7 +396,7 @@ func TestPlanConflicts(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "Show.S01E01.mkv")
 		o := testOptions()
-		o.show = "Re: Zero"
+		o.title = "Re: Zero"
 		dp, err := planDir(dir, nil, o)
 		if err != nil {
 			t.Fatal(err)
@@ -411,7 +411,7 @@ func TestPlanConflicts(t *testing.T) {
 		writeFile(t, dir, "S01E01.mkv")
 		o := testOptions()
 		o.template = " "
-		o.show = " " // overrides the directory fallback
+		o.title = " " // overrides the directory fallback
 		dp, err := planDir(dir, nil, o)
 		if err != nil {
 			t.Fatal(err)
@@ -451,7 +451,7 @@ func TestParseOptions(t *testing.T) {
 		wantErr bool
 		check   func(*testing.T, options)
 	}{
-		{name: "template separator", args: []string{"--template", "{show}/{season}"}, wantErr: true},
+		{name: "template separator", args: []string{"--template", "{title}/{season}"}, wantErr: true},
 		{name: "unknown token", args: []string{"--template", "{bogus}"}, wantErr: true},
 		{name: "malformed token", args: []string{"--template", "{show"}, wantErr: true},
 		{name: "empty template", args: []string{"--template", ""}, wantErr: true},
@@ -483,7 +483,7 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "tv template rejects movie tokens", args: []string{"--template", "{title}"}, wantErr: true},
+		{name: "tv template rejects movie tokens", args: []string{"--template", "{title} {year}"}, wantErr: true},
 		{name: "movies", args: []string{"--movies"}, check: func(t *testing.T, o options) {
 			if !o.movies || o.template != defaultMovieTemplate {
 				t.Fatalf("got %+v", o)
@@ -494,11 +494,15 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %q", o.template)
 			}
 		}},
-		{name: "movies rejects tv tokens", args: []string{"--movies", "--template", "{show}"}, wantErr: true},
+		{name: "movies rejects tv tokens", args: []string{"--movies", "--template", "{title} S{season}"}, wantErr: true},
 		{name: "movies rejects bogus token", args: []string{"--movies", "--template", "{bogus}"}, wantErr: true},
 		{name: "movies rejects separator", args: []string{"--movies", "--template", "{title}/{year}"}, wantErr: true},
 		{name: "movies rejects empty template", args: []string{"--movies", "--template", ""}, wantErr: true},
-		{name: "movies rejects show", args: []string{"--movies", "--show", "Jailer"}, wantErr: true},
+		{name: "movies title", args: []string{"--movies", "--title", "Jailer 2"}, check: func(t *testing.T, o options) {
+			if o.title != "Jailer 2" {
+				t.Fatalf("got %q", o.title)
+			}
+		}},
 		{name: "movies rejects season", args: []string{"--movies", "--season", "2"}, wantErr: true},
 	}
 	for _, tt := range tests {
@@ -1048,6 +1052,22 @@ func TestInputScope(t *testing.T) {
 	})
 }
 
+// TestMovieTitleOverride: --title replaces the detected movie title and keeps
+// the detected year.
+func TestMovieTitleOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Jailer.2.2026.1080p.mkv")
+	o := movieOptions()
+	o.title = "Jailer II"
+	dp, err := planDir(dir, nil, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plannedTargets(dp); len(got) != 1 || got[0] != "Jailer II (2026).mkv" {
+		t.Fatalf("got %v", got)
+	}
+}
+
 func TestRenderMovie(t *testing.T) {
 	tests := []struct {
 		template string
@@ -1080,9 +1100,9 @@ func TestRenderTemplate(t *testing.T) {
 	}{
 		{defaultTemplate, "Show Name", 4, []int{1}, "Show Name - S04E01"},
 		{defaultTemplate, "Show Name", 4, []int{3, 4}, "Show Name - S04E03E04"},
-		{"{show} S{season}E{episode}", "Show Name", 12, []int{2}, "Show Name S12E02"},
-		{"  {show}   {season}  ", " Show  Name ", 1, []int{9}, "Show Name 01"},
-		{"S{season}E{episode} {show}", "Show", 0, []int{3}, "S00E03 Show"},
+		{"{title} S{season}E{episode}", "Show Name", 12, []int{2}, "Show Name S12E02"},
+		{"  {title}   {season}  ", " Show  Name ", 1, []int{9}, "Show Name 01"},
+		{"S{season}E{episode} {title}", "Show", 0, []int{3}, "S00E03 Show"},
 	}
 	for _, tt := range tests {
 		if got := renderTemplate(tt.template, tt.show, tt.season, tt.eps); got != tt.want {

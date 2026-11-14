@@ -41,14 +41,14 @@ go build -o epfix .
 ```sh
 epfix ~/Downloads/Show.S04                     # preview
 epfix --apply ~/Downloads/Show.S04             # rename
-epfix -r --apply --show "Jack Ryan" ~/Media/TV # force the show name
+epfix -r --apply --title "Jack Ryan" ~/Media/TV # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies ~/Downloads/Movies              # preview movies
 epfix --movies --apply ~/Downloads/Movies      # rename movies
 ```
 
 Files with `SxxEyy`, `SxxEyyEzz` or `1x02` in the name are renamed to
-`{show} - S{season}E{episode}.mkv`. `--show`, `--season` and `--template`
+`{title} - S{season}E{episode}.mkv`. `--title`, `--season` and `--template`
 override the derived name. Sidecars (`<video stem>.<anything>`) are renamed
 with their video. A path may be a directory or a video file: a file argument
 renames only that file and the sidecars it owns, and `-r` applies to
@@ -60,8 +60,9 @@ directories only. Overlapping paths are planned once, whatever the spelling, so
 `--movies` switches to movie mode: videos are renamed to `{title} ({year})`, or
 `{title}` when the name has no year, and episodes are left alone. Run once per
 mode when a directory holds both. `--template` sets the name in either mode; in
-movie mode it accepts only `{title}` and `{year}`, and `--show`/`--season` do
-not apply.
+movie mode it accepts only `{title}` and `{year}`, and `--season` does not
+apply. `--title` forces the movie title; it gives every movie in the run the
+same name, so use it with a single file.
 
 The name is cut at the year or at the first quality, source, codec, audio or
 size tag (`1080p`, `WEB-DL`, `x265`, `DDP5.1`, `1.6GB`), after dropping a

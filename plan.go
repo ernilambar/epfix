@@ -66,7 +66,7 @@ var (
 )
 
 const (
-	defaultTemplate      = "{show} - S{season}E{episode}"
+	defaultTemplate      = "{title} - S{season}E{episode}"
 	defaultMovieTemplate = "{title} ({year})"
 )
 
@@ -419,9 +419,9 @@ func formatEpisodes(eps []int) string {
 }
 
 // renderTemplate substitutes tokens, then collapses whitespace.
-func renderTemplate(t, show string, season int, eps []int) string {
+func renderTemplate(t, title string, season int, eps []int) string {
 	out := strings.NewReplacer(
-		"{show}", show,
+		"{title}", title,
 		"{season}", fmt.Sprintf("%02d", season),
 		"{episode}", formatEpisodes(eps),
 	).Replace(t)
@@ -571,9 +571,13 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 			if !ok {
 				continue
 			}
-			v.target = renderMovie(o.template, m.title, m.year)
+			title := m.title
+			if o.title != "" {
+				title = o.title
+			}
+			v.target = renderMovie(o.template, title, m.year)
 		case isEpisode:
-			show := o.show
+			show := o.title
 			if show == "" {
 				show = normalizeShow(info.show)
 			}

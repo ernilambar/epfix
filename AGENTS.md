@@ -73,9 +73,10 @@ hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
    regexes (`SxxEyy`/`SxxEyyEzz`, then `1x02`) plus `normalizeShow`; movie mode
    renames movies with `detectMovie` and still runs `detect` as a skip guard, so
    an episode is never renamed as a movie. The movie vocabulary is the strong
-   and weak token lists in `plan.go`. `--template` accepts `{show}`,
+   and weak token lists in `plan.go`. `--template` accepts `{title}`,
    `{season}`, `{episode}` in TV mode and `{title}`, `{year}` in movie mode;
-   `--show` and `--season` are rejected with `--movies`. Videos are classified
+   `--title` forces the title in both modes, and `--season` is rejected with
+   `--movies`. Videos are classified
    solely by `options.exts`, and sidecars solely by video stem (never by
    extension). Never special-case an individual filename — extend the tables in
    `plan_test.go` (`TestGoldenNames`, `TestGoldenMovieNames`) instead, and do

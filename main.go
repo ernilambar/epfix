@@ -22,9 +22,9 @@ paths may be directories or video files (default ".")
 options:
       --apply                rename files (default: print the plan)
       --movies               rename movies instead of TV episodes
-      --template text        output name template (default "{show} - S{season}E{episode}",
+      --template text        output name template (default "{title} - S{season}E{episode}",
                              with --movies "{title} ({year})")
-      --show text            force the show name (TV mode)
+      --title text           force the title (series name, or movie title with --movies)
       --season int           force the season number (TV mode)
   -r, --recursive            recurse into subdirectories
       --sidecars             rename sidecar files (default)
@@ -42,7 +42,7 @@ type options struct {
 	template  string
 	movies    bool
 	maxYear   int // movie year ceiling: time.Now().Year()+1
-	show      string
+	title     string
 	season    int
 	seasonSet bool
 	recursive bool
@@ -94,7 +94,7 @@ func parseOptions(args []string) (options, error) {
 	fs.BoolVar(&opt.apply, "apply", false, "")
 	fs.BoolVar(&opt.movies, "movies", false, "")
 	fs.StringVar(&opt.template, "template", "", "")
-	fs.StringVar(&opt.show, "show", "", "")
+	fs.StringVar(&opt.title, "title", "", "")
 	fs.IntVar(&season, "season", -1, "")
 	fs.BoolVar(&opt.recursive, "recursive", false, "")
 	fs.BoolVar(&opt.recursive, "r", false, "")
@@ -139,11 +139,8 @@ func parseOptions(args []string) (options, error) {
 	// both: TV tokens for episodes, movie tokens for movies.
 	templateSet := false
 	fs.Visit(func(f *flag.Flag) { templateSet = templateSet || f.Name == "template" })
-	allowed := []string{"show", "season", "episode"}
+	allowed := []string{"title", "season", "episode"}
 	if opt.movies {
-		if opt.show != "" {
-			return opt, errors.New("--show cannot be used with --movies")
-		}
 		if opt.seasonSet {
 			return opt, errors.New("--season cannot be used with --movies")
 		}
