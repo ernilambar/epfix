@@ -34,6 +34,10 @@ type dirPlan struct {
 	dir       string
 	renames   []rename
 	conflicts []conflict
+	// entriesAreDirs marks a synthetic plan whose sources are directories
+	// (movie folder renames), so applyDir stages each one as a directory
+	// rather than a file.
+	entriesAreDirs bool
 }
 
 var (
@@ -44,7 +48,13 @@ var (
 	crossRe    = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])([0-9]{1,2})x([0-9]{1,3})(?:[^\p{L}\p{N}]|$)`)
 	spaceRe    = regexp.MustCompile(`\s+`)
 	seasonDir  = regexp.MustCompile(`(?i)^(?:season[\s._-]*|s)([0-9]{1,2})$`)
-	tokenRe    = regexp.MustCompile(`\{([^{}]*)\}`)
+	// showSeasonRe finds a season-only marker ("S04", "Season 4") in a release
+	// folder name and the show text before it.
+	showSeasonRe = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])(?:season[\s._-]*|s)([0-9]{1,2})(?:[^\p{L}\p{N}]|$)`)
+	// seasonRangeRe marks a multi-season pack ("S01-S05", "Season 1-5"), which
+	// has no single season folder to move into.
+	seasonRangeRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])(?:s|season[\s._-]*)[0-9]{1,2}[\s._-]*(?:-|–|to)[\s._-]*s?[0-9]{1,2}(?:[^\p{L}\p{N}]|$)`)
+	tokenRe       = regexp.MustCompile(`\{([^{}]*)\}`)
 
 	// siteTagRe strips one leading release-site tag. The chunk has no spaces
 	// and starts with "www." or ends in a listed TLD. Any dotted word is not
@@ -146,6 +156,21 @@ func detect(stem string) (episodeInfo, bool) {
 		return info, true
 	}
 	return episodeInfo{}, false
+}
+
+// detectShowSeason finds a season in a folder name. An episode marker counts as
+// its season; otherwise a season-only marker ("S04", "Season 4") supplies the
+// show text before it. A folder with no marker is not a season folder.
+func detectShowSeason(stem string) (show string, season int, ok bool) {
+	if info, isEpisode := detect(stem); isEpisode {
+		return info.show, info.season, true
+	}
+	m := showSeasonRe.FindStringSubmatch(stem)
+	if m == nil {
+		return "", 0, false
+	}
+	season, _ = strconv.Atoi(m[2])
+	return m[1], season, true
 }
 
 // movieInfo is a movie name found in a file stem. year is 0 when the name has
@@ -508,6 +533,142 @@ func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 		plans = append(plans, dp)
 	}
 	return plans, nil
+}
+
+// planMovieFolders plans the movie folders named directly on the command line.
+// A whole-directory target is renamed with the movie template when its own
+// base name looks like a release name, so "All We Imagine As Light (2024)
+// [720p] [BluRay] [YTS.MX]" becomes "All We Imagine As Light (2024)". Files
+// inside are planned by planDir; a nested directory is never renamed, because
+// only the arguments themselves name their folder. It never writes.
+func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, error) {
+	if !o.movies {
+		return nil, nil, nil
+	}
+	var renames []rename
+	var conflicts []conflict
+	for _, t := range targets {
+		if t.names != nil {
+			continue // a file argument's directory is not renamed
+		}
+		src := filepath.Clean(t.dir)
+		base := filepath.Base(src)
+		m, ok := detectMovie(base, o.maxYear)
+		if !ok {
+			continue
+		}
+		title := m.title
+		if o.title != "" {
+			title = o.title
+		}
+		name := renderMovie(o.template, title, m.year)
+		if name == base {
+			continue
+		}
+		if reason := invalidTarget(name); reason != "" {
+			conflicts = append(conflicts, conflict{Reason: reason, detail: name, source: src})
+			continue
+		}
+		renames = append(renames, rename{Source: src, Target: filepath.Join(filepath.Dir(src), name)})
+	}
+
+	sources := make(map[string]bool, len(renames))
+	for _, r := range renames {
+		sources[scopeKey(r.Source)] = true
+	}
+	seen := make(map[string]bool, len(renames))
+	kept := renames[:0]
+	for _, r := range renames {
+		key := scopeKey(r.Target)
+		if seen[key] {
+			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
+			continue
+		}
+		seen[key] = true
+		if !strings.EqualFold(r.Target, r.Source) && !sources[key] {
+			switch _, err := os.Lstat(r.Target); {
+			case err == nil:
+				conflicts = append(conflicts, conflict{Reason: "target exists", detail: filepath.Base(r.Target), source: r.Source})
+				continue
+			case !errors.Is(err, fs.ErrNotExist):
+				return nil, nil, err
+			}
+		}
+		kept = append(kept, r)
+	}
+	return kept, conflicts, nil
+}
+
+// planShowFolders plans renaming the season folders named directly on the
+// command line: "Show.Name.S04.1080p.WEB-DL" becomes "Show Name - S04", and an
+// episode-named folder counts as its season. A folder already inside its show
+// folder, or one with no title text, becomes "Season NN" in place instead. A
+// folder with no season marker, and a multi-season pack, is left alone. Files
+// inside are planned by planDir; nested directories are never renamed. It never
+// writes.
+func planShowFolders(targets []dirTarget, o options) ([]rename, []conflict, error) {
+	if o.movies {
+		return nil, nil, nil
+	}
+	var renames []rename
+	var conflicts []conflict
+	for _, t := range targets {
+		if t.names != nil {
+			continue // a file argument's directory is not renamed
+		}
+		src := filepath.Clean(t.dir)
+		base := filepath.Base(src)
+		rawTitle, season, ok := detectShowSeason(base)
+		if !ok || seasonRangeRe.MatchString(base) {
+			continue
+		}
+		title := normalizeShow(rawTitle)
+		if o.title != "" {
+			title = o.title
+		}
+		if o.seasonSet {
+			season = o.season
+		}
+		number := fmt.Sprintf("%02d", season)
+		parent := filepath.Dir(src)
+		name := "Season " + number
+		// A title that already names the containing folder is not repeated.
+		if title != "" && !strings.EqualFold(filepath.Base(parent), title) {
+			name = title + " - S" + number
+		}
+		if reason := invalidTarget(name); reason != "" {
+			conflicts = append(conflicts, conflict{Reason: reason, detail: name, source: src})
+			continue
+		}
+		target := filepath.Join(parent, name)
+		if strings.EqualFold(target, src) {
+			if target == src {
+				continue // already named
+			}
+			renames = append(renames, rename{Source: src, Target: target})
+			continue
+		}
+		if _, err := os.Lstat(target); err == nil {
+			conflicts = append(conflicts, conflict{Reason: "target exists", detail: name, source: src})
+			continue
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, err
+		}
+		renames = append(renames, rename{Source: src, Target: target})
+	}
+
+	seen := make(map[string]bool, len(renames))
+	kept := renames[:0]
+	for _, r := range renames {
+		key := scopeKey(r.Target)
+		if seen[key] {
+			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
+			continue
+		}
+		seen[key] = true
+		kept = append(kept, r)
+	}
+	return kept, conflicts, nil
 }
 
 // planDir scans one directory. names is the scope: nil plans every video in

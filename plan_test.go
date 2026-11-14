@@ -1099,6 +1099,174 @@ func TestMovieTitleOverride(t *testing.T) {
 	}
 }
 
+// TestMovieFolderRename: in --movies mode a directory named on the command
+// line is renamed with the movie template, while nested directories are not.
+func TestMovieFolderRename(t *testing.T) {
+	const (
+		folder = "All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+		want   = "All We Imagine As Light (2024)"
+	)
+	seed := func(t *testing.T) string {
+		t.Helper()
+		root := t.TempDir()
+		dir := filepath.Join(root, folder)
+		writeFile(t, dir, "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+		return dir
+	}
+
+	t.Run("folder and file", func(t *testing.T) {
+		renames, _, code := planLines(t, []string{"--movies", seed(t)})
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		wantRenames(t, renames,
+			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", want + ".mp4"},
+			[2]string{folder, want})
+	})
+
+	t.Run("tv mode leaves the folder", func(t *testing.T) {
+		renames, _, code := planLines(t, []string{seed(t)})
+		if code != 0 || len(renames) != 0 {
+			t.Fatalf("exit %d, renames %v", code, renames)
+		}
+	})
+
+	t.Run("template and forced title", func(t *testing.T) {
+		renames, _, code := planLines(t, []string{"--movies", "--template", "{title}", "--title", "Forced Name", seed(t)})
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		wantRenames(t, renames,
+			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name.mp4"},
+			[2]string{folder, "Forced Name"})
+	})
+
+	t.Run("nested folder is left alone", func(t *testing.T) {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, folder), "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+		renames, _, code := planLines(t, []string{"--movies", "-r", root})
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		for _, r := range renames {
+			if r[0] == folder {
+				t.Fatalf("nested folder was renamed: %v", renames)
+			}
+		}
+	})
+}
+
+// TestShowFolderRename: in TV mode a season folder named on the command line is
+// renamed to <title> - S<NN>; inside its show folder it becomes Season NN.
+// Episodes count as their season, and a folder with no season marker or a
+// multi-season range is left alone.
+func TestShowFolderRename(t *testing.T) {
+	root := t.TempDir()
+	dir := func(name string) string {
+		path := filepath.Join(root, name)
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	plan := func(t *testing.T, dir string, o options) ([]rename, []conflict) {
+		t.Helper()
+		renames, conflicts, err := planShowFolders([]dirTarget{{dir: dir}}, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return renames, conflicts
+	}
+
+	t.Run("season pack", func(t *testing.T) {
+		renames, conflicts := plan(t, dir("Show.Name.S04.1080p.WEB-DL-GROUP"), testOptions())
+		if len(conflicts) != 0 || len(renames) != 1 {
+			t.Fatalf("want one rename, got %+v %+v", renames, conflicts)
+		}
+		want := filepath.Join(root, "Show Name - S04")
+		if renames[0].Target != want {
+			t.Fatalf("want %q, got %q", want, renames[0].Target)
+		}
+	})
+
+	t.Run("episode folder counts as its season", func(t *testing.T) {
+		renames, _ := plan(t, dir("Show.Name.S01E05.1080p"), testOptions())
+		want := filepath.Join(root, "Show Name - S01")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("season word", func(t *testing.T) {
+		renames, _ := plan(t, dir("Show.Name.Season.3.Complete"), testOptions())
+		want := filepath.Join(root, "Show Name - S03")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("pure season folder stays in place", func(t *testing.T) {
+		show := dir("Show Name")
+		renames, _ := plan(t, dir(filepath.Join("Show Name", "S04")), testOptions())
+		want := filepath.Join(show, "Season 04")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("no season marker skipped", func(t *testing.T) {
+		if renames, conflicts := plan(t, dir("Plain.Show.1080p.WEB-DL"), testOptions()); len(renames) != 0 || len(conflicts) != 0 {
+			t.Fatalf("want nothing, got %+v %+v", renames, conflicts)
+		}
+	})
+
+	t.Run("season range skipped", func(t *testing.T) {
+		if renames, conflicts := plan(t, dir("Other.Show.S01-S05.1080p"), testOptions()); len(renames) != 0 || len(conflicts) != 0 {
+			t.Fatalf("want nothing, got %+v %+v", renames, conflicts)
+		}
+	})
+
+	t.Run("title and season override", func(t *testing.T) {
+		o := testOptions()
+		o.title, o.season, o.seasonSet = "Forced", 7, true
+		renames, _ := plan(t, dir("Show.Name.S04.1080p"), o)
+		want := filepath.Join(root, "Forced - S07")
+		if len(renames) != 1 || renames[0].Target != want {
+			t.Fatalf("want %q, got %+v", want, renames)
+		}
+	})
+
+	t.Run("existing season is a conflict", func(t *testing.T) {
+		dir("Show Name - S04")
+		renames, conflicts := plan(t, dir("Show.Name.S04.1080p"), testOptions())
+		if len(renames) != 0 || len(conflicts) != 1 || conflicts[0].Reason != "target exists" {
+			t.Fatalf("want one target-exists conflict, got %+v %+v", renames, conflicts)
+		}
+	})
+}
+
+// TestMovieFolderConflict: an existing folder at the target aborts the run,
+// so neither the folder nor the files inside it move.
+func TestMovieFolderConflict(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "Jailer 2 (2026) 1080p")
+	writeFile(t, dir, "Jailer.2.2026.1080p.mkv")
+	if err := os.Mkdir(filepath.Join(root, "Jailer 2 (2026)"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var out, errOut bytes.Buffer
+	if code := run([]string{"--movies", dir}, &out, &errOut); code != 1 {
+		t.Fatalf("want exit 1, got %d (%s)", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "target exists") {
+		t.Fatalf("conflict not reported: %s", out.String())
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("folder moved: %v", err)
+	}
+}
+
 func TestRenderMovie(t *testing.T) {
 	tests := []struct {
 		template string
