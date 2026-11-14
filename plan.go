@@ -7,8 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // rename is one file move in a plan.
@@ -42,9 +45,79 @@ var (
 	spaceRe    = regexp.MustCompile(`\s+`)
 	seasonDir  = regexp.MustCompile(`(?i)^(?:season[\s._-]*|s)([0-9]{1,2})$`)
 	tokenRe    = regexp.MustCompile(`\{([^{}]*)\}`)
+
+	// siteTagRe strips one leading release-site tag. The chunk has no spaces
+	// and starts with "www." or ends in a listed TLD. Any dotted word is not
+	// enough: "Dr.No - 1962" is a title, not a site. A hyphen only separates
+	// when a space comes before it, so the glued hyphen of a codec tag
+	// ("Movie.1080p.WEB-DL") is not mistaken for a site tag.
+	siteTagRe = regexp.MustCompile(`(?i)^\s*(?:www\.\S*|\S*\.(?:com|net|org|info|biz|co|in|io|me|cc|ws|to|tv|xyz|top|site|online|club|live|life|lol|pw|fun|company|world|mx|se|ms|gs|vc))(?:\s*[:|–]\s*|\s+-\s*)\s*`)
+	// groupTagRe strips leading [...] and (...) release-group tags.
+	groupTagRe = regexp.MustCompile(`^\s*(?:\[[^\]]*\]|\([^)]*\))(?:\s*(?:\[[^\]]*\]|\([^)]*\)))*\s*`)
+
+	yearRe         = regexp.MustCompile(`[0-9]{4}`)
+	movieSeasonRe  = regexp.MustCompile(`(?i)\b(?:season\s?[0-9]{1,2}|s[0-9]{1,2})\b`)
+	movieEpisodeRe = regexp.MustCompile(`(?i)\b(?:ep|episode|e)\s?[0-9]{1,4}\b`)
+	movieAnimeRe   = regexp.MustCompile(`(?i)\s[-–]\s?[0-9]{1,4}$`)
+	// movieExtraRe marks a sample or trailer, which would otherwise take the
+	// movie's own name and collide with it.
+	movieExtraRe = regexp.MustCompile(`(?i)\b(?:sample|trailer)\b`)
+	emptyPairRe  = regexp.MustCompile(`\s*(?:\(\s*\)|\[\s*\])`)
 )
 
-const defaultTemplate = "{show} - S{season}E{episode}"
+const (
+	defaultTemplate      = "{title} - S{season}E{episode}"
+	defaultMovieTemplate = "{title} ({year})"
+)
+
+// strongTokens start release metadata in a movie name; the first one after the
+// title cuts the title. Bare "web", "ts", "cam", "dd" and "dv" are excluded:
+// they are title words, and "hdcam", "ddp", "dd5.1" and "hdr" cover the real
+// tags. Alternation is built longest-first so "hdr10" is not read as "hdr".
+var strongTokens = []string{
+	// resolution
+	"2160p", "1080p", "720p", "576p", "480p", "4k", "uhd",
+	// source
+	"web-dl", "webdl", "webrip", "web-rip", "hdtv", "hdrip", "bluray", "blu-ray",
+	"bdrip", "brrip", "dvdrip", "dvdscr", "remux", "hdcam", "hdts",
+	"telesync", "predvd",
+	// video
+	"x264", "x265", "h264", "h265", "h.264", "h.265", "hevc", "avc", "av1",
+	"xvid", "divx", "10bit", "hdr", "hdr10",
+	// audio
+	"aac", "ac3", "eac3", "ddp", "dd5.1", "dts", "atmos", "truehd", "flac",
+	// subs
+	"esub", "esubs", "msub",
+}
+
+// strongTokenRe also matches a size tag such as "1.6GB". Bounds are checked by
+// tokenBounded, which rejects a match glued to a letter or digit.
+var strongTokenRe = func() *regexp.Regexp {
+	toks := append([]string(nil), strongTokens...)
+	sort.Slice(toks, func(i, j int) bool { return len(toks[i]) > len(toks[j]) })
+	for i, t := range toks {
+		toks[i] = regexp.QuoteMeta(t)
+	}
+	return regexp.MustCompile(`(?i)(?:` + strings.Join(toks, "|") + `|[0-9]+(?:\.[0-9]+)?(?:mb|gb))`)
+}()
+
+// weakTokens are ordinary words that also end release names: languages, audio
+// words, and edition words. They never cut a title; they are peeled off the end
+// of a title found without a year.
+var weakTokens = func() map[string]bool {
+	words := []string{
+		"telugu", "hindi", "tamil", "malayalam", "kannada", "bengali", "marathi",
+		"punjabi", "english", "korean", "japanese", "chinese", "dual", "multi",
+		"audio", "dubbed",
+		"extended", "unrated", "uncut", "remastered", "proper", "repack", "imax",
+		"theatrical", "directors", "cut", "hq",
+	}
+	m := make(map[string]bool, len(words))
+	for _, w := range words {
+		m[w] = true
+	}
+	return m
+}()
 
 type episodeInfo struct {
 	season   int
@@ -75,6 +148,206 @@ func detect(stem string) (episodeInfo, bool) {
 	return episodeInfo{}, false
 }
 
+// movieInfo is a movie name found in a file stem. year is 0 when the name has
+// no year in front of the release metadata.
+type movieInfo struct {
+	title string
+	year  int
+}
+
+// detectMovie finds a movie title in a file stem. The caller tries detect
+// first: a TV marker never falls through to a movie. maxYear is passed in so
+// the clock never changes a golden test.
+func detectMovie(stem string, maxYear int) (movieInfo, bool) {
+	s := strings.TrimSpace(siteTagRe.ReplaceAllString(stem, ""))
+	s = strings.TrimSpace(groupTagRe.ReplaceAllString(s, ""))
+	if s == "" || movieExtraRe.MatchString(s) {
+		return movieInfo{}, false
+	}
+
+	strong := strongTokenStarts(s)
+	years := movieYearCandidates(s, maxYear)
+	if len(strong) == 0 && !(len(years) > 0 && strings.ContainsAny(s, "._")) {
+		// No release tag, and a year only counts in a dotted or underscored
+		// name: "Jailer 2 (2026)" and "Family Trip 2019" are already named.
+		return movieInfo{}, false
+	}
+
+	// Cut at the earlier of the first strong token and the last year in front
+	// of it. A token or year at position 0 is part of the title itself
+	// ("Cam.2018.1080p", "1917.2160p").
+	cut := len(s)
+	for _, pos := range strong {
+		if pos > 0 && hasTitleText(s[:pos]) {
+			cut = pos
+			break
+		}
+	}
+	year, yearCut := 0, -1
+	for _, pos := range years {
+		if pos >= cut || !hasTitleText(s[:pos]) {
+			continue
+		}
+		if pos > yearCut {
+			yearCut = pos
+		}
+	}
+	if yearCut >= 0 {
+		cut = yearCut
+		year, _ = strconv.Atoi(s[yearCut : yearCut+4])
+	}
+	if cut == len(s) {
+		return movieInfo{}, false
+	}
+
+	title := normalizeMovieTitle(s[:cut])
+	if year == 0 {
+		title = peelWeakTokens(title)
+	}
+	if title == "" || !movieTitleOK(title, maxYear) {
+		return movieInfo{}, false
+	}
+	return movieInfo{title: title, year: year}, true
+}
+
+// strongTokenStarts returns the start offset of every whole strong token in s.
+func strongTokenStarts(s string) []int {
+	var out []int
+	for _, m := range strongTokenRe.FindAllStringIndex(s, -1) {
+		if tokenBounded(s, m[0], m[1]) {
+			out = append(out, m[0])
+		}
+	}
+	return out
+}
+
+// movieYearCandidates returns the start offset of every whole four-digit
+// number that could be a year: bare, or inside parentheses or brackets.
+func movieYearCandidates(s string, maxYear int) []int {
+	var out []int
+	for _, m := range yearRe.FindAllStringIndex(s, -1) {
+		if !tokenBounded(s, m[0], m[1]) {
+			continue
+		}
+		year, _ := strconv.Atoi(s[m[0]:m[1]])
+		if year >= 1900 && year <= maxYear {
+			out = append(out, m[0])
+		}
+	}
+	return out
+}
+
+// tokenBounded reports whether s[start:end] stands alone: the runes around it,
+// if any, are not letters or digits.
+func tokenBounded(s string, start, end int) bool {
+	if start > 0 {
+		if r, _ := utf8.DecodeLastRuneInString(s[:start]); isWordRune(r) {
+			return false
+		}
+	}
+	if end < len(s) {
+		if r, _ := utf8.DecodeRuneInString(s[end:]); isWordRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
+}
+
+// hasTitleText reports whether the text before a cut point holds a title
+// character, not just separators and brackets.
+func hasTitleText(s string) bool {
+	return strings.Trim(s, " -–_.[](){}\t") != ""
+}
+
+// normalizeMovieTitle turns the raw text before the cut into a readable title:
+// dots and underscores become spaces, empty and unbalanced trailing brackets
+// are dropped, and the edges are trimmed.
+func normalizeMovieTitle(s string) string {
+	s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
+	s = spaceRe.ReplaceAllString(s, " ")
+	return trimMovieTitle(s)
+}
+
+// trimMovieTitle trims separators from both edges and drops brackets left
+// empty or unbalanced by the cut. Brackets are matched on the whole title, so
+// "Movie (Director's Cut)" keeps its closing parenthesis.
+func trimMovieTitle(s string) string {
+	s = strings.Trim(s, " -–_.([{")
+	for s != "" {
+		switch s[len(s)-1] {
+		case '(', '[', '{':
+		case ')', ']', '}':
+			if bracketsBalanced(s) {
+				return s
+			}
+		default:
+			return s
+		}
+		s = strings.TrimRight(s[:len(s)-1], " -–_.([{")
+	}
+	return s
+}
+
+// bracketsBalanced reports whether every closing bracket in s has a matching
+// opening bracket before it.
+func bracketsBalanced(s string) bool {
+	var stack []byte
+	for i := range s {
+		switch c := s[i]; c {
+		case '(', '[', '{':
+			stack = append(stack, c)
+		case ')', ']', '}':
+			if len(stack) == 0 {
+				return false
+			}
+			open := stack[len(stack)-1]
+			if (c == ')' && open != '(') || (c == ']' && open != '[') || (c == '}' && open != '{') {
+				return false
+			}
+			stack = stack[:len(stack)-1]
+		}
+	}
+	return len(stack) == 0
+}
+
+// peelWeakTokens drops trailing language and edition words from a title that
+// has no year: "Jailer 2 Telugu" becomes "Jailer 2". It is a heuristic: a title
+// that really ends in such a word loses it, so always review the plan.
+func peelWeakTokens(title string) string {
+	words := strings.Fields(title)
+	for len(words) > 1 && weakTokens[strings.ToLower(words[len(words)-1])] {
+		words = words[:len(words)-1]
+	}
+	return trimMovieTitle(strings.Join(words, " "))
+}
+
+// movieTitleOK rejects titles that look like episode or season fragments
+// rather than movie names.
+func movieTitleOK(title string, maxYear int) bool {
+	if movieSeasonRe.MatchString(title) || movieEpisodeRe.MatchString(title) || movieAnimeRe.MatchString(title) {
+		return false
+	}
+	if hasLetter(title) {
+		return true
+	}
+	// All digits: only a year can stand alone as a title ("1917", "2012").
+	year, err := strconv.Atoi(title)
+	return err == nil && year >= 1900 && year <= maxYear
+}
+
+func hasLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
+}
+
 // normalizeShow turns release-name punctuation into a readable show name.
 // Trailing and leading separators are trimmed so rendering is idempotent:
 // "Show Name - S04E01.mkv" must not become "Show Name - - S04E01.mkv".
@@ -102,7 +375,8 @@ func showFromDir(dir string) string {
 }
 
 // validateTemplate rejects templates that cannot produce a plain file name.
-func validateTemplate(t string) error {
+// allowed lists the tokens the template may use.
+func validateTemplate(t string, allowed ...string) error {
 	if t == "" {
 		return errors.New("template must not be empty")
 	}
@@ -114,10 +388,16 @@ func validateTemplate(t string) error {
 		if strings.ContainsAny(t[last:m[0]], "{}") {
 			return errors.New("malformed template")
 		}
-		switch t[m[2]:m[3]] {
-		case "show", "season", "episode":
-		default:
-			return fmt.Errorf("unknown template token {%s}", t[m[2]:m[3]])
+		tok := t[m[2]:m[3]]
+		ok := false
+		for _, a := range allowed {
+			if tok == a {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("unknown template token {%s}", tok)
 		}
 		last = m[1]
 	}
@@ -139,13 +419,27 @@ func formatEpisodes(eps []int) string {
 }
 
 // renderTemplate substitutes tokens, then collapses whitespace.
-func renderTemplate(t, show string, season int, eps []int) string {
+func renderTemplate(t, title string, season int, eps []int) string {
 	out := strings.NewReplacer(
-		"{show}", show,
+		"{title}", title,
 		"{season}", fmt.Sprintf("%02d", season),
 		"{episode}", formatEpisodes(eps),
 	).Replace(t)
 	return strings.TrimSpace(spaceRe.ReplaceAllString(out, " "))
+}
+
+// renderMovie substitutes the movie tokens, drops the brackets the year left
+// empty, and collapses whitespace, so "{title} ({year})" gives "Jailer 2" when
+// the name has no year.
+func renderMovie(t, title string, year int) string {
+	yearText := ""
+	if year > 0 {
+		yearText = strconv.Itoa(year)
+	}
+	out := strings.NewReplacer("{title}", title, "{year}", yearText).Replace(t)
+	out = emptyPairRe.ReplaceAllString(out, "")
+	out = spaceRe.ReplaceAllString(out, " ")
+	return strings.Trim(out, " -")
 }
 
 // invalidTarget returns a conflict reason when name cannot be written.
@@ -265,25 +559,42 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 	var invalid []conflict
 	dirShow := ""
 	for _, v := range videos {
-		info, ok := detect(v.stem)
-		if !ok {
+		info, isEpisode := detect(v.stem)
+		switch {
+		case o.movies:
+			if isEpisode {
+				// Movie mode still recognizes episodes so it never renames one
+				// as a movie; it just leaves them alone.
+				continue
+			}
+			m, ok := detectMovie(v.stem, o.maxYear)
+			if !ok {
+				continue
+			}
+			title := m.title
+			if o.title != "" {
+				title = o.title
+			}
+			v.target = renderMovie(o.template, title, m.year)
+		case isEpisode:
+			show := o.title
+			if show == "" {
+				show = normalizeShow(info.show)
+			}
+			if show == "" {
+				if dirShow == "" {
+					dirShow = showFromDir(dir)
+				}
+				show = dirShow
+			}
+			season := info.season
+			if o.seasonSet {
+				season = o.season
+			}
+			v.target = renderTemplate(o.template, show, season, info.episodes)
+		default:
 			continue
 		}
-		show := o.show
-		if show == "" {
-			show = normalizeShow(info.show)
-		}
-		if show == "" {
-			if dirShow == "" {
-				dirShow = showFromDir(dir)
-			}
-			show = dirShow
-		}
-		season := info.season
-		if o.seasonSet {
-			season = o.season
-		}
-		v.target = renderTemplate(o.template, show, season, info.episodes)
 		if reason := invalidTarget(v.target); reason != "" {
 			invalid = append(invalid, conflict{Reason: reason, detail: v.target, source: filepath.Join(dir, v.name)})
 			continue

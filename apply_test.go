@@ -100,7 +100,7 @@ func TestCaseOnlyRename(t *testing.T) {
 	writeFile(t, dir, "Show Name - S04E01.mkv")
 
 	o := testOptions()
-	o.show = "show name"
+	o.title = "show name"
 	dp, err := planDir(dir, nil, o)
 	if err != nil {
 		t.Fatal(err)

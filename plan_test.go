@@ -9,7 +9,21 @@ import (
 )
 
 func testOptions() options {
-	return options{template: defaultTemplate, sidecars: true, exts: defaultExts()}
+	return options{
+		template: defaultTemplate,
+		maxYear:  2027,
+		sidecars: true,
+		exts:     defaultExts(),
+	}
+}
+
+// movieOptions is testOptions in movie mode: the mode picks the template
+// vocabulary and default, as parseOptions does.
+func movieOptions() options {
+	o := testOptions()
+	o.movies = true
+	o.template = defaultMovieTemplate
+	return o
 }
 
 func writeFile(t *testing.T, dir, name string) {
@@ -56,10 +70,10 @@ func TestGoldenNames(t *testing.T) {
 		{name: "resolution", file: "Show.1920x1080.mkv", want: ""},
 		{name: "glued marker", file: "ShowS04E01.mkv", want: ""},
 		{name: "three digit season", file: "Show.S104E01.mkv", want: ""},
-		{name: "forced show", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.show = "Jack Ryan" }, want: "Jack Ryan - S04E01.mkv"},
+		{name: "forced title", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.title = "Jack Ryan" }, want: "Jack Ryan - S04E01.mkv"},
 		{name: "forced season", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.season, o.seasonSet = 2, true }, want: "Show Name - S02E01.mkv"},
 		{name: "custom template", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) {
-			o.template = "{show} S{season}E{episode}"
+			o.template = "{title} S{season}E{episode}"
 		}, want: "Show Name S04E01.mkv"},
 		{name: "dir fallback", sub: "Some Show", file: "S01E01.mkv", want: "Some Show - S01E01.mkv"},
 		{name: "season folder fallback", sub: filepath.Join("Some Show", "Season 04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
@@ -92,6 +106,221 @@ func TestGoldenNames(t *testing.T) {
 			}
 			if len(got) != 1 || got[0] != tt.want {
 				t.Fatalf("want [%s], got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+// TestGoldenMovieNames is the movie golden fixture: real release names in, the
+// hand-written library name out. testOptions fixes maxYear so the table never
+// changes with the clock.
+func TestGoldenMovieNames(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string
+		noMovies bool
+		want     []string // expected target base names; nil means no rename
+		conflict string   // expected conflict reason, when non-empty
+	}{
+		{
+			name:  "site prefix",
+			files: []string{"www.5MovieRulz.company - Jailer 2 (2026) 1080p Telugu HQ HDRip - HEVC - (DD+5.1 - 192Kbps & AAC) - 1.6GB - ESub.mkv"},
+			want:  []string{"Jailer 2 (2026).mkv"},
+		},
+		{
+			name:  "year and tags",
+			files: []string{"Jailer.2.2026.1080p.Telugu.HQ.HDRip.HEVC.mkv"},
+			want:  []string{"Jailer 2 (2026).mkv"},
+		},
+		{
+			name:  "year in parentheses",
+			files: []string{"Jailer 2 (2026) Telugu 1080p.mkv"},
+			want:  []string{"Jailer 2 (2026).mkv"},
+		},
+		{
+			name:  "no year peels language",
+			files: []string{"Jailer.2.Telugu.1080p.HDRip.x264.mkv"},
+			want:  []string{"Jailer 2.mkv"},
+		},
+		{
+			name:  "site prefix no year",
+			files: []string{"TamilBlasters.xyz - Movie Name - Tamil - 720p - HDRip.mkv"},
+			want:  []string{"Movie Name.mkv"},
+		},
+		{
+			name:  "bracket group",
+			files: []string{"[YTS.MX] Movie (2020) [1080p].mkv"},
+			want:  []string{"Movie (2020).mkv"},
+		},
+		{
+			name:  "title number is not a year",
+			files: []string{"Blade Runner 2049 (2017) 1080p.mkv"},
+			want:  []string{"Blade Runner 2049 (2017).mkv"},
+		},
+		{
+			name:  "out of range number",
+			files: []string{"Blade.Runner.2049.1080p.mkv"},
+			want:  []string{"Blade Runner 2049.mkv"},
+		},
+		{
+			name:  "leading year is the title",
+			files: []string{"1917.2019.2160p.BluRay.x265-GROUP.mkv"},
+			want:  []string{"1917 (2019).mkv"},
+		},
+		{
+			name:  "leading year and no year cut",
+			files: []string{"2012.1080p.BluRay.mkv"},
+			want:  []string{"2012.mkv"},
+		},
+		{
+			name:  "position zero strong token",
+			files: []string{"Cam.2018.1080p.WEBRip.mkv"},
+			want:  []string{"Cam (2018).mkv"},
+		},
+		{
+			name:  "glued strong token",
+			files: []string{"Camera.2019.1080p.mkv"},
+			want:  []string{"Camera (2019).mkv"},
+		},
+		{
+			name:  "bare web is not a token",
+			files: []string{"Charlottes.Web.2006.720p.mkv"},
+			want:  []string{"Charlottes Web (2006).mkv"},
+		},
+		{
+			name:  "year skips the peel",
+			files: []string{"Johnny.English.2003.1080p.mkv"},
+			want:  []string{"Johnny English (2003).mkv"},
+		},
+		{
+			name:  "dots without a token",
+			files: []string{"Movie.Name.2026.mkv"},
+			want:  []string{"Movie Name (2026).mkv"},
+		},
+		{
+			name:  "no year no tokens",
+			files: []string{"Movie.1080p.WEB-DL.mkv"},
+			want:  []string{"Movie.mkv"},
+		},
+		{
+			name:  "dotted title is not a site",
+			files: []string{"Dr.No - 1962 BluRay.mkv"},
+			want:  []string{"Dr No (1962).mkv"},
+		},
+		{
+			name:  "dotted title before dash keeps title",
+			files: []string{"Mr.Bean - The Movie (1997) 1080p.mkv"},
+			want:  []string{"Mr Bean - The Movie (1997).mkv"},
+		},
+		{
+			name:  "cam is a title word",
+			files: []string{"The.Cam.Girl.2020.1080p.mkv"},
+			want:  []string{"The Cam Girl (2020).mkv"},
+		},
+		{
+			name:  "dd and dv are title words",
+			files: []string{"The.Dd.Dv.Movie.2020.1080p.mkv"},
+			want:  []string{"The Dd Dv Movie (2020).mkv"},
+		},
+		{
+			name:  "year past maxYear is a title word",
+			files: []string{"Movie.2028.1080p.mkv"},
+			want:  []string{"Movie 2028.mkv"},
+		},
+		{
+			name:  "sample skipped",
+			files: []string{"Movie.2020.1080p.mkv", "Movie.2020.1080p.sample.mkv", "Movie.2020.1080p-Sample.mkv"},
+			want:  []string{"Movie (2020).mkv"},
+		},
+		{
+			name:  "trailer skipped",
+			files: []string{"Movie.Name.2020.trailer.mkv", "Movie.Name.Trailer.1080p.mkv"},
+		},
+		{
+			name:  "already renamed",
+			files: []string{"Jailer 2 (2026).mkv"},
+		},
+		{
+			name:  "spaces without a token",
+			files: []string{"Family Trip 2019.mkv"},
+		},
+		{
+			name:  "season pack",
+			files: []string{"Show.S01.1080p.WEB-DL.mkv"},
+		},
+		{
+			name:  "season words",
+			files: []string{"Show.Season.2.720p.mkv"},
+		},
+		{
+			name:  "anime numbering",
+			files: []string{"[SubsPlease] Frieren - 12 (1080p).mkv"},
+		},
+		{
+			name:  "episode words",
+			files: []string{"Show.Ep.12.720p.mkv"},
+		},
+		{
+			name:  "digits only",
+			files: []string{"12345.1080p.mkv"},
+		},
+		{
+			name:  "episode skipped",
+			files: []string{"Show.S01E01.1080p.mkv"},
+		},
+		{
+			name:     "opt-in",
+			files:    []string{"Movie.2026.1080p.mkv"},
+			noMovies: true,
+		},
+		{
+			name:  "sidecar",
+			files: []string{"Movie.2026.1080p.mkv", "Movie.2026.1080p.en.srt"},
+			want:  []string{"Movie (2026).mkv", "Movie (2026).en.srt"},
+		},
+		{
+			name:     "duplicate target",
+			files:    []string{"Movie.2026.1080p.mkv", "Movie.2026.720p.mkv"},
+			conflict: "duplicate target",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range tt.files {
+				writeFile(t, dir, name)
+			}
+			o := movieOptions()
+			if tt.noMovies {
+				o = testOptions()
+			}
+			dp, err := planDir(dir, nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.conflict != "" {
+				if len(dp.conflicts) != 1 || dp.conflicts[0].Reason != tt.conflict {
+					t.Fatalf("want conflict %q, got %+v", tt.conflict, dp.conflicts)
+				}
+				return
+			}
+			if len(dp.conflicts) != 0 {
+				t.Fatalf("unexpected conflicts: %+v", dp.conflicts)
+			}
+			got := plannedTargets(dp)
+			if tt.want == nil {
+				if len(got) != 0 {
+					t.Fatalf("want no rename, got %v", got)
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("want %v, got %v", tt.want, got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("want %v, got %v", tt.want, got)
+				}
 			}
 		})
 	}
@@ -167,7 +396,7 @@ func TestPlanConflicts(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, "Show.S01E01.mkv")
 		o := testOptions()
-		o.show = "Re: Zero"
+		o.title = "Re: Zero"
 		dp, err := planDir(dir, nil, o)
 		if err != nil {
 			t.Fatal(err)
@@ -182,7 +411,7 @@ func TestPlanConflicts(t *testing.T) {
 		writeFile(t, dir, "S01E01.mkv")
 		o := testOptions()
 		o.template = " "
-		o.show = " " // overrides the directory fallback
+		o.title = " " // overrides the directory fallback
 		dp, err := planDir(dir, nil, o)
 		if err != nil {
 			t.Fatal(err)
@@ -222,7 +451,7 @@ func TestParseOptions(t *testing.T) {
 		wantErr bool
 		check   func(*testing.T, options)
 	}{
-		{name: "template separator", args: []string{"--template", "{show}/{season}"}, wantErr: true},
+		{name: "template separator", args: []string{"--template", "{title}/{season}"}, wantErr: true},
 		{name: "unknown token", args: []string{"--template", "{bogus}"}, wantErr: true},
 		{name: "malformed token", args: []string{"--template", "{show"}, wantErr: true},
 		{name: "empty template", args: []string{"--template", ""}, wantErr: true},
@@ -249,6 +478,32 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
+		{name: "tv template default", check: func(t *testing.T, o options) {
+			if o.movies || o.template != defaultTemplate {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "tv template rejects movie tokens", args: []string{"--template", "{title} {year}"}, wantErr: true},
+		{name: "movies", args: []string{"--movies"}, check: func(t *testing.T, o options) {
+			if !o.movies || o.template != defaultMovieTemplate {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "movies template", args: []string{"--movies", "--template", "{title} - {year}"}, check: func(t *testing.T, o options) {
+			if o.template != "{title} - {year}" {
+				t.Fatalf("got %q", o.template)
+			}
+		}},
+		{name: "movies rejects tv tokens", args: []string{"--movies", "--template", "{title} S{season}"}, wantErr: true},
+		{name: "movies rejects bogus token", args: []string{"--movies", "--template", "{bogus}"}, wantErr: true},
+		{name: "movies rejects separator", args: []string{"--movies", "--template", "{title}/{year}"}, wantErr: true},
+		{name: "movies rejects empty template", args: []string{"--movies", "--template", ""}, wantErr: true},
+		{name: "movies title", args: []string{"--movies", "--title", "Jailer 2"}, check: func(t *testing.T, o options) {
+			if o.title != "Jailer 2" {
+				t.Fatalf("got %q", o.title)
+			}
+		}},
+		{name: "movies rejects season", args: []string{"--movies", "--season", "2"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -361,6 +616,17 @@ func TestInputScope(t *testing.T) {
 		wantRenames(t, renames,
 			[2]string{s01, "Show - S01E01.mkv"},
 			[2]string{"Show.S01E01.srt", "Show - S01E01.srt"})
+	})
+
+	t.Run("movie file leaves sibling episode alone", func(t *testing.T) {
+		dir := seed(t, "Jailer.2.2026.1080p.mkv", "Jailer.2.2026.1080p.srt")
+		renames, _, code := planLines(t, []string{"--movies", filepath.Join(dir, "Jailer.2.2026.1080p.mkv")})
+		if code != 0 {
+			t.Fatalf("exit %d", code)
+		}
+		wantRenames(t, renames,
+			[2]string{"Jailer.2.2026.1080p.mkv", "Jailer 2 (2026).mkv"},
+			[2]string{"Jailer.2.2026.1080p.srt", "Jailer 2 (2026).srt"})
 	})
 
 	t.Run("file does not steal sibling sidecar", func(t *testing.T) {
@@ -786,6 +1052,44 @@ func TestInputScope(t *testing.T) {
 	})
 }
 
+// TestMovieTitleOverride: --title replaces the detected movie title and keeps
+// the detected year.
+func TestMovieTitleOverride(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Jailer.2.2026.1080p.mkv")
+	o := movieOptions()
+	o.title = "Jailer II"
+	dp, err := planDir(dir, nil, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plannedTargets(dp); len(got) != 1 || got[0] != "Jailer II (2026).mkv" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestRenderMovie(t *testing.T) {
+	tests := []struct {
+		template string
+		title    string
+		year     int
+		want     string
+	}{
+		{defaultMovieTemplate, "Jailer 2", 2026, "Jailer 2 (2026)"},
+		{defaultMovieTemplate, "Jailer 2", 0, "Jailer 2"},
+		{"[{year}] {title}", "Jailer 2", 0, "Jailer 2"},
+		{"{title} - {year}", "Jailer 2", 0, "Jailer 2"},
+		{"{title}({year})", "Movie", 0, "Movie"},
+		{"{year} {title}", "Jailer 2", 2026, "2026 Jailer 2"},
+		{"[{year}] {title}", "Jailer 2", 2026, "[2026] Jailer 2"},
+	}
+	for _, tt := range tests {
+		if got := renderMovie(tt.template, tt.title, tt.year); got != tt.want {
+			t.Errorf("%q: want %q, got %q", tt.template, tt.want, got)
+		}
+	}
+}
+
 func TestRenderTemplate(t *testing.T) {
 	tests := []struct {
 		template string
@@ -796,9 +1100,9 @@ func TestRenderTemplate(t *testing.T) {
 	}{
 		{defaultTemplate, "Show Name", 4, []int{1}, "Show Name - S04E01"},
 		{defaultTemplate, "Show Name", 4, []int{3, 4}, "Show Name - S04E03E04"},
-		{"{show} S{season}E{episode}", "Show Name", 12, []int{2}, "Show Name S12E02"},
-		{"  {show}   {season}  ", " Show  Name ", 1, []int{9}, "Show Name 01"},
-		{"S{season}E{episode} {show}", "Show", 0, []int{3}, "S00E03 Show"},
+		{"{title} S{season}E{episode}", "Show Name", 12, []int{2}, "Show Name S12E02"},
+		{"  {title}   {season}  ", " Show  Name ", 1, []int{9}, "Show Name 01"},
+		{"S{season}E{episode} {title}", "Show", 0, []int{3}, "S00E03 Show"},
 	}
 	for _, tt := range tests {
 		if got := renderTemplate(tt.template, tt.show, tt.season, tt.eps); got != tt.want {
