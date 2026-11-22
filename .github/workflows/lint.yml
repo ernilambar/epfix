@@ -35,4 +35,4 @@ jobs:
         run: go test -count=1 ./...
 
       - name: Build
-        run: go build -o /tmp/epfix .
+        run: go build -ldflags "-macos 15.0" -o /tmp/epfix .

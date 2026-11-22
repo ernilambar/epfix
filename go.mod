@@ -1,3 +1,3 @@
 module github.com/ernilambar/epfix
 
-go 1.22
+go 1.27

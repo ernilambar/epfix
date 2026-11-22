@@ -15,18 +15,18 @@ repository root.
 
 ## Setup
 
-Go 1.22 or newer (`go.mod`). No third-party modules, no environment variables,
+Go 1.27 or newer (`go.mod`). No third-party modules, no environment variables,
 no config files, no network access.
 
 ```sh
 go mod download
-go build -o epfix .
+go build -ldflags '-macos 15.0' -o epfix .
 ```
 
 ## Commands
 
 ```sh
-go build -o epfix .                        # build
+go build -ldflags '-macos 15.0' -o epfix .  # build
 go test ./...                              # test
 go vet ./...                               # lint
 gofmt -w .                                 # format
@@ -39,11 +39,12 @@ go test -run TestShowFolderRename -v ./...  # focused: TV season folder moves
 
 `.github/workflows/lint.yml` runs the same format/vet/test/build checks on
 `main` and on pull requests. `.github/workflows/release.yml` publishes a single
-raw binary, `epfix-darwin-arm64` (`main.version` stamped from the tag), for a
-`v*` tag. macOS on Apple silicon is the only supported platform: do not add an
-amd64 build. Packaging and distribution are handled outside this repository:
-no formula or packaging config belongs here; `README.md` documents installation
-only.
+raw binary, `epfix-darwin-arm64` (`main.version` stamped from the tag, minimum
+macOS 15.0), for a `v*` tag. macOS 15 on Apple silicon is the only supported
+platform: do not add an amd64 build. The release body is only the GitHub compare
+URL to the previous tag; do not add release-note text. Packaging and
+distribution are handled outside this repository: no formula or packaging
+config belongs here; `README.md` documents installation only.
 
 ## Releasing
 
@@ -110,7 +111,7 @@ Run from the repository root in this order. Every command must exit `0`, and
 gofmt -l .
 go vet ./...
 go test ./...
-go build -o /tmp/epfix-check .
+go build -ldflags '-macos 15.0' -o /tmp/epfix-check .
 ```
 
 Report the commands you ran. Do not claim completion if any step fails; fix the

@@ -21,6 +21,8 @@ Upgrade later with `brew upgrade epfix`.
 
 ### Prebuilt binary
 
+Requires macOS 15 or newer on Apple silicon; Intel Macs are not supported.
+
 Download `epfix-darwin-arm64` from the
 [latest release](https://github.com/ernilambar/epfix/releases/latest):
 
@@ -32,10 +34,10 @@ sudo mv epfix /usr/local/bin/
 
 ### From source
 
-Requires Go 1.22+.
+Requires Go 1.27+ on macOS 15 or newer (Apple silicon).
 
 ```sh
-go build -o epfix .
+GOARCH=arm64 go build -ldflags '-macos 15.0' -o epfix .
 ```
 
 ## Usage

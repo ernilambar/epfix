@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -25,10 +27,22 @@ jobs:
           CGO_ENABLED: 0
         run: |
           version="${GITHUB_REF_NAME#v}"
-          go build -ldflags "-s -w -X main.version=${version}" -o dist/epfix-darwin-arm64 .
+          go build -ldflags "-s -w -macos 15.0 -X main.version=${version}" -o dist/epfix-darwin-arm64 .
+
+      - name: Write release notes
+        run: |
+          previous="$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            printf 'https://github.com/%s/compare/%s...%s\n' \
+              "$GITHUB_REPOSITORY" "$previous" "$GITHUB_REF_NAME" > release-notes.md
+          else
+            printf 'https://github.com/%s/commits/%s\n' \
+              "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" > release-notes.md
+          fi
 
       - name: Attach binary to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/epfix-darwin-arm64
-          generate_release_notes: true
+          body_path: release-notes.md
+          generate_release_notes: false
