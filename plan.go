@@ -449,69 +449,11 @@ func invalidTarget(name string) string {
 	return ""
 }
 
-// planPaths plans every target named by the invocation. Recursive targets go
-// first, and a directory is planned at most once: a later target in a
-// directory a walk already visited is skipped, and a walk that reaches a
-// planned directory skips its subtree (the earlier walk covered it). Hidden
-// and symlinked directories, which a walk never enters, keep their own
-// targets.
+// planPaths plans every target named by the invocation. targets has already
+// merged arguments that name one directory, so each is planned once.
 func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 	var plans []dirPlan
-	planned := make(map[string]bool)
 	for _, t := range targets {
-		if !t.recursive {
-			continue
-		}
-		// WalkDir does not descend a symlinked root, so walk the resolved
-		// root and print each path under the user's spelling. Symlinked
-		// subdirectories are still not followed.
-		root, err := filepath.EvalSymlinks(t.dir)
-		if err != nil {
-			return nil, err
-		}
-		err = filepath.WalkDir(root, func(walked string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if !d.IsDir() {
-				return nil
-			}
-			if walked != root && strings.HasPrefix(d.Name(), ".") {
-				return fs.SkipDir
-			}
-			path := t.dir
-			if walked != root {
-				rel, err := filepath.Rel(root, walked)
-				if err != nil {
-					return err
-				}
-				path = filepath.Join(t.dir, rel)
-			}
-			key, err := dirKey(path)
-			if err != nil {
-				return err
-			}
-			if planned[key] {
-				return fs.SkipDir
-			}
-			planned[key] = true
-			dp, err := planDir(path, nil, o)
-			if err != nil {
-				return err
-			}
-			if len(dp.renames) > 0 || len(dp.conflicts) > 0 {
-				plans = append(plans, dp)
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-	for _, t := range targets {
-		if t.recursive || planned[t.key] {
-			continue
-		}
 		dp, err := planDir(t.dir, t.names, o)
 		if err != nil {
 			return nil, err

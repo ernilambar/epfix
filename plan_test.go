@@ -657,11 +657,6 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "aliases", args: []string{"-r", "dir"}, check: func(t *testing.T, o options) {
-			if !o.recursive {
-				t.Fatalf("got %+v", o)
-			}
-		}},
 		{name: "short aliases", args: []string{"-a", "-t", "Show", "-s", "2", "-V", "dir"}, check: func(t *testing.T, o options) {
 			if !o.apply || o.title != "Show" || !o.seasonSet || o.season != 2 || !o.version {
 				t.Fatalf("got %+v", o)
@@ -704,8 +699,8 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "terminator preserves path order", args: []string{"a", "-r", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
-			if !o.recursive || strings.Join(o.paths, "|") != "a|b|c|-d" {
+		{name: "terminator preserves path order", args: []string{"a", "-m", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
+			if !o.movies || strings.Join(o.paths, "|") != "a|b|c|-d" {
 				t.Fatalf("got %+v", o)
 			}
 		}},
@@ -901,34 +896,6 @@ func TestInputScope(t *testing.T) {
 						t.Fatalf("args %v: %s planned twice", args, r[0])
 					}
 					seen[r[0]] = true
-				}
-			})
-		}
-	})
-
-	t.Run("recursive arguments plan once", func(t *testing.T) {
-		tests := []struct {
-			name string
-			args []string
-		}{
-			{"same dot twice", []string{"-r", ".", "."}},
-			{"dir twice", []string{"-r", "sub", "sub"}},
-			{"dir and dot dir", []string{"-r", "sub", "./sub"}},
-			{"dir and nested file", []string{"-r", "sub", "sub/deep/Other.S01E01.mkv"}},
-			{"dir and nested dir", []string{"-r", "sub", "sub/deep"}},
-			{"nested file then dir", []string{"sub/deep/Other.S01E01.mkv", "-r", "sub"}},
-		}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				chdirTemp(t)
-				writeFile(t, "sub", "Show.S01E01.mkv")
-				writeFile(t, filepath.Join("sub", "deep"), "Other.S01E01.mkv")
-				renames, stderr, code := planLines(t, tt.args)
-				if code != 0 {
-					t.Fatalf("exit %d (%s)", code, stderr)
-				}
-				if len(renames) != 2 {
-					t.Fatalf("args %v: want 2 renames, got %d: %v", tt.args, len(renames), renames)
 				}
 			})
 		}
@@ -1169,9 +1136,7 @@ func TestInputScope(t *testing.T) {
 		for _, args := range [][]string{
 			{"--apply", "sub", "SUB"},
 			{"--apply", "sub", "link"},
-			{"--apply", "-r", "sub", "LINK"},
-			{"--apply", "-r", "link"},
-			{"--apply", "-r", "link", "sub"},
+			{"--apply", "link", "SUB"},
 			{"--apply", "sub/Show.S01E01.mkv", "SUB/show.s01e01.mkv"},
 		} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -1194,31 +1159,6 @@ func TestInputScope(t *testing.T) {
 		}
 	})
 
-	// Regression: WalkDir does not descend a symlinked root, so -r link
-	// planned nothing. Nested paths print under the typed spelling, and a
-	// symlinked subdirectory is still not followed.
-	t.Run("recursive symlink root", func(t *testing.T) {
-		chdirTemp(t)
-		writeFile(t, filepath.Join("real", "Season 01"), s01)
-		writeFile(t, "other", "Other.S01E01.mkv")
-		if err := os.Symlink("real", "link"); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(filepath.Join("..", "other"), filepath.Join("real", "inner")); err != nil {
-			t.Fatal(err)
-		}
-		var out, errOut bytes.Buffer
-		if code := run([]string{"-r", "link"}, &out, &errOut); code != 0 {
-			t.Fatalf("exit %d (%s)", code, errOut.String())
-		}
-		if !strings.Contains(out.String(), "1 rename, 0 conflicts") {
-			t.Fatalf("want one rename, got %s", out.String())
-		}
-		if !strings.Contains(out.String(), filepath.Join("link", "Season 01", s01)) {
-			t.Fatalf("path not printed under the typed spelling: %s", out.String())
-		}
-	})
-
 	// Regression: the notice compared typed spellings, so an absolute
 	// directory plus a relative file in it reported a planned file as
 	// "nothing to rename".
@@ -1232,32 +1172,11 @@ func TestInputScope(t *testing.T) {
 		for _, args := range [][]string{
 			{filepath.Join(abs, "sub"), "sub/" + s01},
 			{"sub", filepath.Join(abs, "sub", s01)},
-			{"-r", ".", "SUB/show.s01e01.mkv"},
 		} {
 			renames, stderr, code := planLines(t, args)
 			if code != 0 || len(renames) != 1 || stderr != "" {
 				t.Fatalf("args %v: exit %d, renames %v, stderr %q", args, code, renames, stderr)
 			}
-		}
-	})
-
-	// Regression: -r used to absorb explicit targets the walk never enters
-	// (hidden directories), silently dropping them.
-	t.Run("recursive keeps explicit targets in hidden directories", func(t *testing.T) {
-		for _, args := range [][]string{
-			{"-r", ".", ".hid"},
-			{"-r", ".", ".hid/Other.S01E01.mkv"},
-		} {
-			t.Run(strings.Join(args, " "), func(t *testing.T) {
-				chdirTemp(t)
-				writeFile(t, ".", s01)
-				writeFile(t, ".hid", "Other.S01E01.mkv")
-				renames, stderr, code := planLines(t, args)
-				if code != 0 || stderr != "" {
-					t.Fatalf("exit %d (%s)", code, stderr)
-				}
-				wantRenames(t, renames, [2]string{s01, "Show - S01E01.mkv"}, [2]string{"Other.S01E01.mkv", "Other - S01E01.mkv"})
-			})
 		}
 	})
 
@@ -1345,7 +1264,7 @@ func TestMovieFolderRename(t *testing.T) {
 	t.Run("nested folder is left alone", func(t *testing.T) {
 		root := t.TempDir()
 		writeFile(t, filepath.Join(root, folder), "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
-		renames, _, code := planLines(t, []string{"--movies", "-r", root})
+		renames, _, code := planLines(t, []string{"--movies", root})
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}

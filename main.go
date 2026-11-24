@@ -27,7 +27,6 @@ options:
   -m, --movies               rename movies instead of TV episodes
   -t, --title text           force the title (series name, or movie title with --movies)
   -s, --season int           force the season number, zero or positive (TV mode)
-  -r, --recursive            recurse into subdirectories
   -V, --version              print the version
   -h, --help                 print this help
 
@@ -41,7 +40,6 @@ type options struct {
 	title     string
 	season    int
 	seasonSet bool
-	recursive bool
 	version   bool
 	help      bool
 	paths     []string
@@ -85,8 +83,6 @@ func parseOptions(args []string) (options, error) {
 	fs.StringVar(&opt.title, "t", "", "")
 	fs.IntVar(&season, "season", 0, "")
 	fs.IntVar(&season, "s", 0, "")
-	fs.BoolVar(&opt.recursive, "recursive", false, "")
-	fs.BoolVar(&opt.recursive, "r", false, "")
 	fs.BoolVar(&opt.version, "version", false, "")
 	fs.BoolVar(&opt.version, "V", false, "")
 	fs.BoolVar(&opt.help, "help", false, "")
@@ -134,12 +130,10 @@ func parseOptions(args []string) (options, error) {
 // dirTarget is one path argument after resolution. A whole directory scans
 // every matching video (names nil); a file argument scans exactly the named
 // video, plus the sidecars it owns (names set, keys folded by scopeKey).
-// recursive applies to directory targets only.
 type dirTarget struct {
-	dir       string          // first spelling seen; used in printed paths
-	key       string          // dirKey(dir)
-	names     map[string]bool // nil = every video in dir
-	recursive bool
+	dir   string          // first spelling seen; used in printed paths
+	key   string          // dirKey(dir)
+	names map[string]bool // nil = every video in dir
 }
 
 // explicitFile is a file argument as typed, plus its entryKey.
@@ -158,9 +152,7 @@ type resolution struct {
 
 // targets resolves the path arguments, defaulting to the working directory.
 // Targets in the same directory merge by dirKey: the first spelling seen wins
-// as dir, and a whole directory absorbs file targets in it. Targets below a
-// recursive directory are deduplicated by planPaths, which knows what the
-// walk actually visits.
+// as dir, and a whole directory absorbs file targets in it.
 func (o options) targets() (resolution, error) {
 	paths := o.paths
 	if len(paths) == 0 {
@@ -196,7 +188,6 @@ func (o options) targets() (resolution, error) {
 		t := &res.targets[i]
 		if name == "" {
 			t.names = nil // a whole directory absorbs file targets in it
-			t.recursive = o.recursive
 			continue
 		}
 		if fk := key + string(filepath.Separator) + scopeKey(name); !seen[fk] {

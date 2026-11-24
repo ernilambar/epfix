@@ -45,7 +45,7 @@ GOARCH=arm64 go build -ldflags '-macos 15.0' -o epfix .
 ```sh
 epfix ~/Downloads/Show.S04                      # preview
 epfix --apply ~/Downloads/Show.S04              # rename
-epfix -r --apply --title "Jack Ryan" ~/Media/TV # force the series name
+epfix --apply --title "Jack Ryan" ~/Downloads/Show.S04 # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies --apply ~/Downloads/Movies       # rename movies
 epfix --movies --apply ~/"Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"

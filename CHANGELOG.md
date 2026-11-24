@@ -7,8 +7,7 @@
 - Fixed: two folders renamed to one target could partly apply
 - Fixed: sidecars renamed twice or left behind
 - Fixed: `--movies` renamed episode files and folders
-- Fixed: `-r` on a symlinked folder planned nothing
-- Removed: `--template`, `--sidecars`, `--no-sidecars`, `--ext`, and `--quiet`
+- Removed: `--template`, `--sidecars`, `--no-sidecars`, `--ext`, `--quiet`, and `-r`/`--recursive`
 
 ## 0.1.2 - 2026-11-14
 - Added: rename movie folders named as path arguments in `--movies` mode
