@@ -44,7 +44,8 @@ macOS 15.0), for a `v*` tag. macOS 15 on Apple silicon is the only supported
 platform: do not add an amd64 build. The release body is only the GitHub compare
 URL to the previous tag; do not add release-note text. Packaging and
 distribution are handled outside this repository: no formula or packaging
-config belongs here; `README.md` documents installation only.
+config belongs here; `README.md` and `docs/install.md` document installation
+only.
 
 ## Releasing
 

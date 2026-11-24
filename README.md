@@ -2,43 +2,17 @@
 
 Fix episode and movie names in place. No API, no network.
 
-Renames TV episode and movie files from release names to library names. Plans by
-default; `--apply` to rename. Movie detection is opt-in with `--movies`, which
-also renames the movie folder when the folder itself is the path argument. In TV
-mode, a season folder passed as the path is renamed to `Show Name - S01`.
+Renames release names to library names. Prints a plan by default; `--apply`
+renames.
 
 ## Install
 
-### Homebrew (recommended)
-
 ```sh
-brew tap ernilambar/tap
-brew trust ernilambar/tap
-brew install epfix
+brew tap ernilambar/tap && brew trust ernilambar/tap && brew install epfix
 ```
 
-Upgrade later with `brew upgrade epfix`.
-
-### Prebuilt binary
-
-Requires macOS 15 or newer on Apple silicon; Intel Macs are not supported.
-
-Download `epfix-darwin-arm64` from the
-[latest release](https://github.com/ernilambar/epfix/releases/latest):
-
-```sh
-curl -L -o epfix https://github.com/ernilambar/epfix/releases/latest/download/epfix-darwin-arm64
-chmod +x epfix
-sudo mv epfix /usr/local/bin/
-```
-
-### From source
-
-Requires Go 1.27+ on macOS 15 or newer (Apple silicon).
-
-```sh
-GOARCH=arm64 go build -ldflags '-macos 15.0' -o epfix .
-```
+macOS 15+ on Apple silicon only. Prebuilt binary and source build:
+[docs/install.md](docs/install.md).
 
 ## Usage
 
@@ -56,26 +30,21 @@ epfix --apply ~/Downloads/Show.Name.S04.1080p.WEB-DL
 ```
 
 - Episodes (`SxxEyy`, `1x02`) become `Show Name - S04E01`.
-- Multi-episode files keep every episode as `S01E01E02`. A dash is a range
+- Multi-episode files keep every episode: `S01E01E02`. A dash is a range
   (`S01E01-E03`, `S01E01-03`, `1x01-02`, `1x01-1x02`); a dot or a repeated `E`
-  lists episodes (`S01E01.E02`, `S01E01E02`, `1x01.1x02`). A descending range
-  (`S01E05-E03`) or a `1x` run that changes season is left alone.
-- In TV mode, a season folder passed as a path argument is renamed to
-  `Show Name - S01` in place; inside its show folder, or with no title text, it
-  becomes `Season 01`. An episode-named folder counts as its season;
-  multi-season packs (`S01-S05`) and folders with no season marker are left
-  alone. Only arguments are renamed, not nested folders. Files inside are
-  renamed first.
+  is a list (`S01E01.E02`, `S01E01E02`, `1x01.1x02`). Descending ranges
+  (`S01E05-E03`) and `1x` runs that change season are left alone.
 - With `--movies`, movies become `Movie (2026)`, or `Movie` without a year.
-  Episodes are left alone in this mode.
-- With `--movies`, a directory named as a path argument is renamed the same way
-  when its own name looks like a release name. Only arguments are renamed, not
-  nested folders. Files inside are renamed first.
-- Only the files directly inside each path are renamed; subfolders are not
-  scanned. Pass each season folder, e.g. `Show/*/`.
+  Episodes are left alone.
+- A folder passed as a path is renamed too: a TV season folder to
+  `Show Name - S01` (`Season 01` inside its show folder), a movie folder with
+  `--movies` to `Movie (2026)`. Multi-season packs (`S01-S05`) and folders
+  without a season marker are left alone.
+- Only files directly inside each path are renamed; subfolders are not scanned.
+  Pass each season folder, e.g. `Show/*/`.
 - Sidecars such as subtitles are renamed with their video.
-- Any conflict aborts the whole run before a file moves. There is no undo, so
-  review the preview before `--apply`.
+- Any conflict aborts the whole run before a file moves. There is no undo:
+  review the plan before `--apply`.
 
 See `epfix --help` for all flags. Exit codes: `0` ok, `1` conflict or rename
 failure, `2` usage error.
