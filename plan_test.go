@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -77,6 +78,19 @@ func TestGoldenNames(t *testing.T) {
 		}, want: "Show Name S04E01.mkv"},
 		{name: "dir fallback", sub: "Some Show", file: "S01E01.mkv", want: "Some Show - S01E01.mkv"},
 		{name: "season folder fallback", sub: filepath.Join("Some Show", "Season 04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
+		{name: "short season folder fallback", sub: filepath.Join("Some Show", "S04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
+		{name: "dir fallback normalized", sub: "Show_Name", file: "S01E01.mkv", want: "Show Name - S01E01.mkv"},
+		{name: "release season folder fallback", sub: "Show.Name.S04.1080p.WEB-DL", file: "S04E01.mkv", want: "Show Name - S04E01.mkv"},
+		{name: "dash e range", file: "Show.S01E01-E02.1080p.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "dash range", file: "Show.S01E03-04.1080p.mkv", want: "Show - S01E03E04.mkv"},
+		{name: "dot list", file: "Show.S01E05.E06.1080p.mkv", want: "Show - S01E05E06.mkv"},
+		{name: "long range", file: "Show.S01E01-E03.mkv", want: "Show - S01E01E02E03.mkv"},
+		{name: "descending range skipped", file: "Show.S01E05-E03.mkv", want: ""},
+		{name: "dash before resolution", file: "Show.S01E01-720p.mkv", want: "Show - S01E01.mkv"},
+		{name: "x form range", file: "Show.1x01-02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form repeated range", file: "Show.1x01-1x02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form dot list", file: "Show.1x01.1x02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form season change skipped", file: "Show.1x10-2x01.mkv", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -106,6 +120,50 @@ func TestGoldenNames(t *testing.T) {
 			}
 			if len(got) != 1 || got[0] != tt.want {
 				t.Fatalf("want [%s], got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+// TestRenameIdempotent: planning a directory again after its renames are
+// applied plans nothing, so a second run never renames a file twice.
+func TestRenameIdempotent(t *testing.T) {
+	tests := []struct {
+		sub, file string
+		movies    bool
+	}{
+		{sub: "Show_Name", file: "S01E01.mkv"},
+		{sub: "Show.Name.S04.1080p.WEB-DL", file: "S04E01.mkv"},
+		{sub: "Some Show", file: "Show.S01E01-E02.1080p.mkv"},
+		{sub: "Some Show", file: "Show.1x01-1x02.HDTV.mkv"},
+		{sub: "Films", file: "[REC].2007.1080p.mkv", movies: true},
+		{sub: "Films", file: "(500).Days.Of.Summer.2009.1080p.mkv", movies: true},
+		{sub: "Films", file: "The.Guest.DDP5.1.1080p.mkv", movies: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), tt.sub)
+			writeFile(t, dir, tt.file)
+			o := testOptions()
+			if tt.movies {
+				o = movieOptions()
+			}
+			dp, err := planDir(dir, nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(dp.renames) != 1 || len(dp.conflicts) != 0 {
+				t.Fatalf("first run: want one rename, got %+v %+v", dp.renames, dp.conflicts)
+			}
+			if err := os.Rename(dp.renames[0].Source, dp.renames[0].Target); err != nil {
+				t.Fatal(err)
+			}
+			again, err := planDir(dir, nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(again.renames) != 0 || len(again.conflicts) != 0 {
+				t.Fatalf("second run renamed %s: %+v %+v", filepath.Base(dp.renames[0].Target), again.renames, again.conflicts)
 			}
 		})
 	}
@@ -151,6 +209,31 @@ func TestGoldenMovieNames(t *testing.T) {
 			name:  "bracket group",
 			files: []string{"[YTS.MX] Movie (2020) [1080p].mkv"},
 			want:  []string{"Movie (2020).mkv"},
+		},
+		{
+			name:  "bracketed title glued to year",
+			files: []string{"[REC].2007.1080p.mkv"},
+			want:  []string{"[REC] (2007).mkv"},
+		},
+		{
+			name:  "parenthesized title start",
+			files: []string{"(500).Days.Of.Summer.2009.1080p.mkv"},
+			want:  []string{"(500) Days Of Summer (2009).mkv"},
+		},
+		{
+			name:  "glued audio channels",
+			files: []string{"The.Guest.DDP5.1.1080p.mkv"},
+			want:  []string{"The Guest.mkv"},
+		},
+		{
+			name:  "glued frame rate",
+			files: []string{"Some.Film.1080p60.x264.mkv"},
+			want:  []string{"Some Film.mkv"},
+		},
+		{
+			name:  "glued aac and dts channels",
+			files: []string{"Movie.Name.AAC5.1.mkv", "Other.Name.DTS5.1.mkv"},
+			want:  []string{"Movie Name.mkv", "Other Name.mkv"},
 		},
 		{
 			name:  "title number is not a year",
@@ -257,6 +340,32 @@ func TestGoldenMovieNames(t *testing.T) {
 			files: []string{"[SubsPlease] Frieren - 12 (1080p).mkv"},
 		},
 		{
+			name:  "anime version",
+			files: []string{"[Grp] Show - 12v2 [1080p].mkv"},
+		},
+		{
+			name:  "anime range",
+			files: []string{"[Grp] Show - 12-13 [1080p].mkv"},
+		},
+		{
+			name:  "anime en-dash version",
+			files: []string{"[Grp] Show – 12v2 [1080p].mkv"},
+		},
+		{
+			name:  "anime en-dash range",
+			files: []string{"[Grp] Show – 12–13 [1080p].mkv"},
+		},
+		{
+			name:  "numbered title",
+			files: []string{"The.Taking.of.Pelham.123.2009.1080p.mkv"},
+			want:  []string{"The Taking of Pelham 123 (2009).mkv"},
+		},
+		{
+			name:  "numbered title with dash",
+			files: []string{"Mission - Impossible 2 (2000) [1080p].mkv"},
+			want:  []string{"Mission - Impossible 2 (2000).mkv"},
+		},
+		{
 			name:  "episode words",
 			files: []string{"Show.Ep.12.720p.mkv"},
 		},
@@ -359,6 +468,86 @@ func TestSidecars(t *testing.T) {
 	}
 	if got := plannedTargets(dp); len(got) != 1 || got[0] != "Show Name - S04E01.mkv" {
 		t.Fatalf("--no-sidecars planned %v", got)
+	}
+}
+
+// TestSidecarOwnership: each sidecar belongs to exactly one video, so two
+// videos sharing a stem rename it once, and an out-of-scope video never
+// donates or steals a sidecar.
+func TestSidecarOwnership(t *testing.T) {
+	seed := func(t *testing.T, files ...string) string {
+		t.Helper()
+		dir := t.TempDir()
+		for _, name := range files {
+			writeFile(t, dir, name)
+		}
+		return dir
+	}
+	plan := func(t *testing.T, dir string, scope ...string) dirPlan {
+		t.Helper()
+		var names map[string]bool
+		if len(scope) > 0 {
+			names = map[string]bool{}
+			for _, n := range scope {
+				names[scopeKey(n)] = true
+			}
+		}
+		dp, err := planDir(dir, names, testOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dp.conflicts) != 0 {
+			t.Fatalf("unexpected conflicts: %+v", dp.conflicts)
+		}
+		return dp
+	}
+	want := func(t *testing.T, dp dirPlan, want ...string) {
+		t.Helper()
+		got := plannedTargets(dp)
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("want %v, got %v", want, got)
+		}
+	}
+	shared := []string{"Show.S01E01.mkv", "Show.S01E01.mp4", "Show.S01E01.en.srt"}
+
+	t.Run("shared stem renames sidecar once", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...))
+		want(t, dp, "Show - S01E01.mkv", "Show - S01E01.mp4", "Show - S01E01.en.srt")
+	})
+
+	t.Run("file-scoped mkv keeps its sidecar", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...), "Show.S01E01.mkv")
+		want(t, dp, "Show - S01E01.mkv", "Show - S01E01.en.srt")
+	})
+
+	t.Run("file-scoped mp4 keeps its sidecar", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...), "Show.S01E01.mp4")
+		want(t, dp, "Show - S01E01.mp4", "Show - S01E01.en.srt")
+	})
+
+	t.Run("out-of-scope longer stem keeps its sidecar", func(t *testing.T) {
+		dir := seed(t, "Show.S01E01.mkv", "Show.S01E01.720p.mkv", "Show.S01E01.720p.srt")
+		want(t, plan(t, dir, "Show.S01E01.mkv"), "Show - S01E01.mkv")
+	})
+}
+
+// TestSidecarCase: sidecar stems match case-insensitively, like scopeKey,
+// and keep their own suffix spelling.
+func TestSidecarCase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Show.S01E01.1080p.mkv")
+	writeFile(t, dir, "show.s01e01.1080p.EN.srt")
+	dp, err := planDir(dir, nil, testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := plannedTargets(dp)
+	sort.Strings(got)
+	want := []string{"Show - S01E01.EN.srt", "Show - S01E01.mkv"}
+	if len(dp.conflicts) != 0 || strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("want %v, got %v %+v", want, got, dp.conflicts)
 	}
 }
 
@@ -547,6 +736,41 @@ func TestParseOptions(t *testing.T) {
 			}
 		}},
 		{name: "movies rejects season", args: []string{"--movies", "--season", "2"}, wantErr: true},
+		{name: "terminator keeps trailing apply as path", args: []string{"--", "Show.S01E01.mkv", "-a"}, check: func(t *testing.T, o options) {
+			if o.apply || strings.Join(o.paths, "|") != "Show.S01E01.mkv|-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator after path keeps flag as path", args: []string{"dir", "--", "-m"}, check: func(t *testing.T, o options) {
+			if o.movies || strings.Join(o.paths, "|") != "dir|-m" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator keeps long apply as path", args: []string{"--", "--apply"}, check: func(t *testing.T, o options) {
+			if o.apply || strings.Join(o.paths, "|") != "--apply" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator preserves path order", args: []string{"a", "-q", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
+			if !o.quiet || strings.Join(o.paths, "|") != "a|b|c|-d" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "value flag consumes double dash", args: []string{"--title", "--", "--", "-a"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "single-dash long value flag consumes double dash", args: []string{"-title", "--", "x"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || strings.Join(o.paths, "|") != "x" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "double-dash short value flag consumes double dash", args: []string{"--t", "--", "--", "-a"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1019,6 +1243,8 @@ func TestInputScope(t *testing.T) {
 			{"--apply", "sub", "SUB"},
 			{"--apply", "sub", "link"},
 			{"--apply", "-r", "sub", "LINK"},
+			{"--apply", "-r", "link"},
+			{"--apply", "-r", "link", "sub"},
 			{"--apply", "sub/Show.S01E01.mkv", "SUB/show.s01e01.mkv"},
 		} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -1038,6 +1264,31 @@ func TestInputScope(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
+		}
+	})
+
+	// Regression: WalkDir does not descend a symlinked root, so -r link
+	// planned nothing. Nested paths print under the typed spelling, and a
+	// symlinked subdirectory is still not followed.
+	t.Run("recursive symlink root", func(t *testing.T) {
+		chdirTemp(t)
+		writeFile(t, filepath.Join("real", "Season 01"), s01)
+		writeFile(t, "other", "Other.S01E01.mkv")
+		if err := os.Symlink("real", "link"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "other"), filepath.Join("real", "inner")); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		if code := run([]string{"-r", "link"}, &out, &errOut); code != 0 {
+			t.Fatalf("exit %d (%s)", code, errOut.String())
+		}
+		if !strings.Contains(out.String(), "1 rename, 0 conflicts") {
+			t.Fatalf("want one rename, got %s", out.String())
+		}
+		if !strings.Contains(out.String(), filepath.Join("link", "Season 01", s01)) {
+			t.Fatalf("path not printed under the typed spelling: %s", out.String())
 		}
 	})
 
@@ -1151,6 +1402,17 @@ func TestMovieFolderRename(t *testing.T) {
 		wantRenames(t, renames,
 			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name.mp4"},
 			[2]string{folder, "Forced Name"})
+	})
+
+	t.Run("episode folder is left alone", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "Show.Name.S01E05.1080p")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		renames, _, code := planLines(t, []string{"--movies", dir})
+		if code != 0 || len(renames) != 0 {
+			t.Fatalf("exit %d, renames %v", code, renames)
+		}
 	})
 
 	t.Run("nested folder is left alone", func(t *testing.T) {
@@ -1277,6 +1539,97 @@ func TestMovieFolderConflict(t *testing.T) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("folder moved: %v", err)
 	}
+}
+
+// TestFolderTargetIdentity: folder targets are keyed by the physical parent
+// plus the folded base name, so mixed spellings of one target conflict and
+// nothing moves, while a target that is itself a planned source stays allowed.
+func TestFolderTargetIdentity(t *testing.T) {
+	mkdirs := func(t *testing.T, names ...string) {
+		t.Helper()
+		for _, name := range names {
+			if err := os.MkdirAll(name, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// wantAbort runs with --apply and expects a duplicate-target conflict,
+	// exit 1, and every listed folder still in place.
+	wantAbort := func(t *testing.T, args []string, keep ...string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := run(append([]string{"--apply"}, args...), &out, &errOut); code != 1 {
+			t.Fatalf("want exit 1, got %d: %s%s", code, out.String(), errOut.String())
+		}
+		if !strings.Contains(out.String(), "duplicate target") {
+			t.Fatalf("duplicate not reported: %s", out.String())
+		}
+		for _, name := range keep {
+			if _, err := os.Lstat(name); err != nil {
+				t.Fatalf("%s moved: %v", name, err)
+			}
+		}
+	}
+	abs := func(t *testing.T, name string) string {
+		t.Helper()
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(wd, name)
+	}
+
+	t.Run("movie relative and absolute", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "Movie.2020.1080p", "Movie (2020) [720p]")
+		wantAbort(t, []string{"-m", "Movie.2020.1080p", abs(t, "Movie (2020) [720p]")},
+			"Movie.2020.1080p", "Movie (2020) [720p]")
+	})
+
+	t.Run("show relative and absolute", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "Show.S02.WEB", "Show.S02.1080p")
+		wantAbort(t, []string{"Show.S02.WEB", abs(t, "Show.S02.1080p")},
+			"Show.S02.WEB", "Show.S02.1080p")
+	})
+
+	t.Run("movie through symlinked parent", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "real/Movie.2020.1080p", "real/Movie (2020) [720p]")
+		if err := os.Symlink("real", "lnk"); err != nil {
+			t.Fatal(err)
+		}
+		wantAbort(t, []string{"-m", "lnk/Movie.2020.1080p", "real/Movie (2020) [720p]"},
+			"real/Movie.2020.1080p", "real/Movie (2020) [720p]")
+	})
+
+	t.Run("show through symlinked parent", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "real/Show.S02.WEB", "real/Show.S02.1080p")
+		if err := os.Symlink("real", "lnk"); err != nil {
+			t.Fatal(err)
+		}
+		wantAbort(t, []string{"lnk/Show.S02.WEB", "real/Show.S02.1080p"},
+			"real/Show.S02.WEB", "real/Show.S02.1080p")
+	})
+
+	// The naming rules are idempotent, so a canonical folder never renames
+	// to another name: the reachable chain is a case-only show-folder rename,
+	// whose target is its own planned source and exists on the
+	// case-insensitive filesystem. It must not be reported as "target
+	// exists". detectMovie rejects an already-canonical movie name, so movie
+	// folders have no reachable chain.
+	t.Run("show target is a planned source", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "show - s02")
+		var out, errOut bytes.Buffer
+		if code := run([]string{"--apply", "--title", "Show", "show - s02"}, &out, &errOut); code != 0 {
+			t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+		}
+		if got := names(t, "."); len(got) != 1 || got[0] != "Show - S02" {
+			t.Fatalf("want [Show - S02], got %v", got)
+		}
+	})
 }
 
 func TestRenderMovie(t *testing.T) {
