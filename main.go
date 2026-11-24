@@ -136,20 +136,16 @@ func parseOptions(args []string) (options, error) {
 	fs.BoolVar(&opt.help, "help", false, "")
 	fs.BoolVar(&opt.help, "h", false, "")
 
-	// A bare "--" ends flag parsing permanently: everything after it is a
-	// path verbatim, even "-a" or "--apply". Flags still follow ordinary
-	// positional paths. Value flags consume the next token, so "--title --"
-	// sets the title to "--" instead of ending parsing.
-	flagArgs := args
-	var verbatim []string
-	if term := terminatorIndex(fs, args); term >= 0 {
-		flagArgs = args[:term]
-		verbatim = args[term+1:]
-	}
-	rest := flagArgs
+	// Flags may follow paths. A bare "--" ends flag parsing for good, so
+	// everything after it is a path, even "-a".
+	rest := args
 	for {
 		if err := fs.Parse(rest); err != nil {
 			return opt, err
+		}
+		if n := len(rest) - fs.NArg(); n > 0 && rest[n-1] == "--" {
+			opt.paths = append(opt.paths, fs.Args()...)
+			break
 		}
 		if fs.NArg() == 0 {
 			break
@@ -157,7 +153,6 @@ func parseOptions(args []string) (options, error) {
 		opt.paths = append(opt.paths, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	opt.paths = append(opt.paths, verbatim...)
 
 	// Visit reports every flag given, so an explicit --season 0 is told apart
 	// from the default and a negative season is rejected instead of ignored.
@@ -208,32 +203,6 @@ func parseOptions(args []string) (options, error) {
 	return opt, nil
 }
 
-// terminatorIndex returns the index of the first bare "--" that ends flag
-// parsing, or -1. A "--" consumed as a value-flag argument is not a
-// terminator: "--title --" sets the title to "--". Whether a flag takes a
-// value is read from fs, so every spelling the flag package accepts ("-title",
-// "--t") is handled and new flags need no extra wiring.
-func terminatorIndex(fs *flag.FlagSet, args []string) int {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			return i
-		}
-		if len(a) < 2 || a[0] != '-' || strings.Contains(a, "=") {
-			continue
-		}
-		f := fs.Lookup(strings.TrimLeft(a, "-"))
-		if f == nil {
-			continue
-		}
-		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
-			continue
-		}
-		i++ // the value flag consumes the next token
-	}
-	return -1
-}
-
 func parseExts(csv string) ([]string, error) {
 	var out []string
 	for _, part := range strings.Split(csv, ",") {
@@ -263,7 +232,7 @@ type dirTarget struct {
 	recursive bool
 }
 
-// explicitFile is a file argument as typed, plus its fileKey.
+// explicitFile is a file argument as typed, plus its entryKey.
 type explicitFile struct {
 	path string
 	key  string
@@ -289,7 +258,7 @@ func (o options) targets() (resolution, error) {
 	}
 	var res resolution
 	byDir := make(map[string]int, len(paths)) // dirKey → index into res.targets
-	seen := make(map[string]bool, len(paths)) // fileKey of explicit files
+	seen := make(map[string]bool, len(paths)) // entryKey of explicit files
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -346,23 +315,13 @@ func dirKey(dir string) (string, error) {
 	return scopeKey(real), nil
 }
 
-// fileKey identifies a file by its directory's dirKey and its folded name.
-func fileKey(p string) (string, error) {
-	key, err := dirKey(filepath.Dir(p))
-	if err != nil {
-		return "", err
-	}
-	return key + string(filepath.Separator) + scopeKey(filepath.Base(p)), nil
-}
-
-// dirEntryKey identifies a directory entry (a folder rename source or target)
-// by its parent's dirKey plus the folded base name. The final component is
-// never resolved: a directory argument may itself be a symlink, and folder
-// renames act on that entry. Mixed spellings of the same physical target —
-// relative versus absolute, or through a symlinked parent — share one key.
-// Planned sources use the same helper so a chain through alternate spellings
-// stays valid.
-func dirEntryKey(p string) (string, error) {
+// entryKey identifies a directory entry (a file, or a folder rename source or
+// target) by its parent's dirKey plus the folded base name. The final
+// component is never resolved: a folder argument may itself be a symlink, and
+// a folder rename acts on that entry. Resolving the parent keeps two
+// spellings of one directory, such as a symlink and its target, from planning
+// two renames onto one file.
+func entryKey(p string) (string, error) {
 	parent, err := dirKey(filepath.Dir(p))
 	if err != nil {
 		return "", err
@@ -436,7 +395,7 @@ func runPlan(opt options, stdout, stderr io.Writer) int {
 			}
 		}
 		for _, src := range sources {
-			key, err := fileKey(src)
+			key, err := entryKey(src)
 			if err != nil {
 				fmt.Fprintf(stderr, "epfix: %v\n", err)
 				return 1

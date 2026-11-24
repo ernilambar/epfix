@@ -62,6 +62,11 @@ hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
 
 ## Conventions
 
+0. **Personal tool: fix real filenames only.** Change detection or argument
+   handling only for a filename or invocation that actually broke, and add it
+   to the golden tables first. Do not harden against hypothetical inputs. The
+   data-safety rules below (plan first, abort on conflict, staged renames,
+   never overwrite) are not hypothetical and stay.
 1. **Standard library only.** Do not add dependencies, subpackages, or new
    directories; new code belongs in `main.go`, `plan.go`, or `apply.go`.
 2. **Planning is read-only.** `planDir`, `planPaths`, `planMovieFolders`,

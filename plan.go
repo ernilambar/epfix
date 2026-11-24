@@ -336,78 +336,18 @@ func hasTitleText(s string) bool {
 }
 
 // normalizeMovieTitle turns the raw text before the cut into a readable title:
-// dots and underscores become spaces, empty and unbalanced trailing brackets
-// are dropped, and the edges are trimmed.
+// dots and underscores become spaces, and the edges are trimmed.
 func normalizeMovieTitle(s string) string {
 	s = strings.NewReplacer(".", " ", "_", " ").Replace(s)
 	s = spaceRe.ReplaceAllString(s, " ")
 	return trimMovieTitle(s)
 }
 
-// trimMovieTitle trims separators from both edges and drops brackets left
-// empty or unbalanced by the cut. Brackets are matched on the whole title, so
-// "Movie (Director's Cut)" keeps its closing parenthesis and "(500) Days Of
-// Summer" keeps its opening one.
+// trimMovieTitle drops brackets left empty by the cut, plus separators and
+// opening brackets dangling at the edges: "Movie (" becomes "Movie".
 func trimMovieTitle(s string) string {
-	s = strings.Trim(s, " -–_.")
-	for s != "" && strings.ContainsRune("([{", rune(s[0])) && !leadingBracketClosed(s) {
-		s = strings.TrimLeft(s[1:], " -–_.")
-	}
-	s = strings.TrimRight(s, " -–_.([{")
-	for s != "" {
-		switch s[len(s)-1] {
-		case '(', '[', '{':
-		case ')', ']', '}':
-			if bracketsBalanced(s) {
-				return s
-			}
-		default:
-			return s
-		}
-		s = strings.TrimRight(s[:len(s)-1], " -–_.([{")
-	}
-	return s
-}
-
-// leadingBracketClosed reports whether the opening bracket at s[0] has a
-// matching closing bracket: "(500) Days (" keeps its first parenthesis, while
-// the "(" of "(Movie (Cut)" was left dangling by a cut.
-func leadingBracketClosed(s string) bool {
-	depth := 0
-	for i := range s {
-		switch s[i] {
-		case '(', '[', '{':
-			depth++
-		case ')', ']', '}':
-			depth--
-			if depth == 0 {
-				return bracketsBalanced(s[:i+1])
-			}
-		}
-	}
-	return false
-}
-
-// bracketsBalanced reports whether every closing bracket in s has a matching
-// opening bracket before it.
-func bracketsBalanced(s string) bool {
-	var stack []byte
-	for i := range s {
-		switch c := s[i]; c {
-		case '(', '[', '{':
-			stack = append(stack, c)
-		case ')', ']', '}':
-			if len(stack) == 0 {
-				return false
-			}
-			open := stack[len(stack)-1]
-			if (c == ')' && open != '(') || (c == ']' && open != '[') || (c == '}' && open != '{') {
-				return false
-			}
-			stack = stack[:len(stack)-1]
-		}
-	}
-	return len(stack) == 0
+	s = emptyPairRe.ReplaceAllString(s, "")
+	return strings.TrimRight(strings.TrimLeft(s, " -–_."), " -–_.([{")
 }
 
 // peelWeakTokens drops trailing language and edition words from a title that
@@ -668,38 +608,7 @@ func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, err
 		renames = append(renames, rename{Source: src, Target: filepath.Join(filepath.Dir(src), name)})
 	}
 
-	sources := make(map[string]bool, len(renames))
-	for _, r := range renames {
-		key, err := dirEntryKey(r.Source)
-		if err != nil {
-			return nil, nil, err
-		}
-		sources[key] = true
-	}
-	seen := make(map[string]bool, len(renames))
-	kept := renames[:0]
-	for _, r := range renames {
-		key, err := dirEntryKey(r.Target)
-		if err != nil {
-			return nil, nil, err
-		}
-		if seen[key] {
-			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
-			continue
-		}
-		seen[key] = true
-		if !strings.EqualFold(r.Target, r.Source) && !sources[key] {
-			switch _, err := os.Lstat(r.Target); {
-			case err == nil:
-				conflicts = append(conflicts, conflict{Reason: "target exists", detail: filepath.Base(r.Target), source: r.Source})
-				continue
-			case !errors.Is(err, fs.ErrNotExist):
-				return nil, nil, err
-			}
-		}
-		kept = append(kept, r)
-	}
-	return kept, conflicts, nil
+	return checkFolderTargets(renames, conflicts)
 }
 
 // planShowFolders plans renaming the season folders named directly on the
@@ -750,9 +659,16 @@ func planShowFolders(targets []dirTarget, o options) ([]rename, []conflict, erro
 		renames = append(renames, rename{Source: src, Target: target})
 	}
 
+	return checkFolderTargets(renames, conflicts)
+}
+
+// checkFolderTargets drops folder renames whose target is taken: by another
+// planned folder (duplicate target) or by an existing entry that this batch
+// does not rename away (target exists). It reads but never writes.
+func checkFolderTargets(renames []rename, conflicts []conflict) ([]rename, []conflict, error) {
 	sources := make(map[string]bool, len(renames))
 	for _, r := range renames {
-		key, err := dirEntryKey(r.Source)
+		key, err := entryKey(r.Source)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -761,7 +677,7 @@ func planShowFolders(targets []dirTarget, o options) ([]rename, []conflict, erro
 	seen := make(map[string]bool, len(renames))
 	kept := renames[:0]
 	for _, r := range renames {
-		key, err := dirEntryKey(r.Target)
+		key, err := entryKey(r.Target)
 		if err != nil {
 			return nil, nil, err
 		}
