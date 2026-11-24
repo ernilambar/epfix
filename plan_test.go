@@ -547,6 +547,41 @@ func TestParseOptions(t *testing.T) {
 			}
 		}},
 		{name: "movies rejects season", args: []string{"--movies", "--season", "2"}, wantErr: true},
+		{name: "terminator keeps trailing apply as path", args: []string{"--", "Show.S01E01.mkv", "-a"}, check: func(t *testing.T, o options) {
+			if o.apply || strings.Join(o.paths, "|") != "Show.S01E01.mkv|-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator after path keeps flag as path", args: []string{"dir", "--", "-m"}, check: func(t *testing.T, o options) {
+			if o.movies || strings.Join(o.paths, "|") != "dir|-m" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator keeps long apply as path", args: []string{"--", "--apply"}, check: func(t *testing.T, o options) {
+			if o.apply || strings.Join(o.paths, "|") != "--apply" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "terminator preserves path order", args: []string{"a", "-q", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
+			if !o.quiet || strings.Join(o.paths, "|") != "a|b|c|-d" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "value flag consumes double dash", args: []string{"--title", "--", "--", "-a"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "single-dash long value flag consumes double dash", args: []string{"-title", "--", "x"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || strings.Join(o.paths, "|") != "x" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "double-dash short value flag consumes double dash", args: []string{"--t", "--", "--", "-a"}, check: func(t *testing.T, o options) {
+			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
+				t.Fatalf("got %+v", o)
+			}
+		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1277,6 +1312,97 @@ func TestMovieFolderConflict(t *testing.T) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("folder moved: %v", err)
 	}
+}
+
+// TestFolderTargetIdentity: folder targets are keyed by the physical parent
+// plus the folded base name, so mixed spellings of one target conflict and
+// nothing moves, while a target that is itself a planned source stays allowed.
+func TestFolderTargetIdentity(t *testing.T) {
+	mkdirs := func(t *testing.T, names ...string) {
+		t.Helper()
+		for _, name := range names {
+			if err := os.MkdirAll(name, 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// wantAbort runs with --apply and expects a duplicate-target conflict,
+	// exit 1, and every listed folder still in place.
+	wantAbort := func(t *testing.T, args []string, keep ...string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		if code := run(append([]string{"--apply"}, args...), &out, &errOut); code != 1 {
+			t.Fatalf("want exit 1, got %d: %s%s", code, out.String(), errOut.String())
+		}
+		if !strings.Contains(out.String(), "duplicate target") {
+			t.Fatalf("duplicate not reported: %s", out.String())
+		}
+		for _, name := range keep {
+			if _, err := os.Lstat(name); err != nil {
+				t.Fatalf("%s moved: %v", name, err)
+			}
+		}
+	}
+	abs := func(t *testing.T, name string) string {
+		t.Helper()
+		wd, err := os.Getwd()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(wd, name)
+	}
+
+	t.Run("movie relative and absolute", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "Movie.2020.1080p", "Movie (2020) [720p]")
+		wantAbort(t, []string{"-m", "Movie.2020.1080p", abs(t, "Movie (2020) [720p]")},
+			"Movie.2020.1080p", "Movie (2020) [720p]")
+	})
+
+	t.Run("show relative and absolute", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "Show.S02.WEB", "Show.S02.1080p")
+		wantAbort(t, []string{"Show.S02.WEB", abs(t, "Show.S02.1080p")},
+			"Show.S02.WEB", "Show.S02.1080p")
+	})
+
+	t.Run("movie through symlinked parent", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "real/Movie.2020.1080p", "real/Movie (2020) [720p]")
+		if err := os.Symlink("real", "lnk"); err != nil {
+			t.Fatal(err)
+		}
+		wantAbort(t, []string{"-m", "lnk/Movie.2020.1080p", "real/Movie (2020) [720p]"},
+			"real/Movie.2020.1080p", "real/Movie (2020) [720p]")
+	})
+
+	t.Run("show through symlinked parent", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "real/Show.S02.WEB", "real/Show.S02.1080p")
+		if err := os.Symlink("real", "lnk"); err != nil {
+			t.Fatal(err)
+		}
+		wantAbort(t, []string{"lnk/Show.S02.WEB", "real/Show.S02.1080p"},
+			"real/Show.S02.WEB", "real/Show.S02.1080p")
+	})
+
+	// The naming rules are idempotent, so a canonical folder never renames
+	// to another name: the reachable chain is a case-only show-folder rename,
+	// whose target is its own planned source and exists on the
+	// case-insensitive filesystem. It must not be reported as "target
+	// exists". detectMovie rejects an already-canonical movie name, so movie
+	// folders have no reachable chain.
+	t.Run("show target is a planned source", func(t *testing.T) {
+		chdirTemp(t)
+		mkdirs(t, "show - s02")
+		var out, errOut bytes.Buffer
+		if code := run([]string{"--apply", "--title", "Show", "show - s02"}, &out, &errOut); code != 0 {
+			t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
+		}
+		if got := names(t, "."); len(got) != 1 || got[0] != "Show - S02" {
+			t.Fatalf("want [Show - S02], got %v", got)
+		}
+	})
 }
 
 func TestRenderMovie(t *testing.T) {

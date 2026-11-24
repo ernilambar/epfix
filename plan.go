@@ -574,12 +574,19 @@ func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, err
 
 	sources := make(map[string]bool, len(renames))
 	for _, r := range renames {
-		sources[scopeKey(r.Source)] = true
+		key, err := dirEntryKey(r.Source)
+		if err != nil {
+			return nil, nil, err
+		}
+		sources[key] = true
 	}
 	seen := make(map[string]bool, len(renames))
 	kept := renames[:0]
 	for _, r := range renames {
-		key := scopeKey(r.Target)
+		key, err := dirEntryKey(r.Target)
+		if err != nil {
+			return nil, nil, err
+		}
 		if seen[key] {
 			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
 			continue
@@ -641,31 +648,41 @@ func planShowFolders(targets []dirTarget, o options) ([]rename, []conflict, erro
 			continue
 		}
 		target := filepath.Join(parent, name)
-		if strings.EqualFold(target, src) {
-			if target == src {
-				continue // already named
-			}
-			renames = append(renames, rename{Source: src, Target: target})
-			continue
-		}
-		if _, err := os.Lstat(target); err == nil {
-			conflicts = append(conflicts, conflict{Reason: "target exists", detail: name, source: src})
-			continue
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return nil, nil, err
+		if target == src {
+			continue // already named
 		}
 		renames = append(renames, rename{Source: src, Target: target})
 	}
 
+	sources := make(map[string]bool, len(renames))
+	for _, r := range renames {
+		key, err := dirEntryKey(r.Source)
+		if err != nil {
+			return nil, nil, err
+		}
+		sources[key] = true
+	}
 	seen := make(map[string]bool, len(renames))
 	kept := renames[:0]
 	for _, r := range renames {
-		key := scopeKey(r.Target)
+		key, err := dirEntryKey(r.Target)
+		if err != nil {
+			return nil, nil, err
+		}
 		if seen[key] {
 			conflicts = append(conflicts, conflict{Reason: "duplicate target", detail: filepath.Base(r.Target), source: r.Source})
 			continue
 		}
 		seen[key] = true
+		if !sources[key] {
+			switch _, err := os.Lstat(r.Target); {
+			case err == nil:
+				conflicts = append(conflicts, conflict{Reason: "target exists", detail: filepath.Base(r.Target), source: r.Source})
+				continue
+			case !errors.Is(err, fs.ErrNotExist):
+				return nil, nil, err
+			}
+		}
 		kept = append(kept, r)
 	}
 	return kept, conflicts, nil

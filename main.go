@@ -136,9 +136,17 @@ func parseOptions(args []string) (options, error) {
 	fs.BoolVar(&opt.help, "help", false, "")
 	fs.BoolVar(&opt.help, "h", false, "")
 
-	// flag stops at the first positional; re-parse the rest so flags may follow
-	// paths.
-	rest := args
+	// A bare "--" ends flag parsing permanently: everything after it is a
+	// path verbatim, even "-a" or "--apply". Flags still follow ordinary
+	// positional paths. Value flags consume the next token, so "--title --"
+	// sets the title to "--" instead of ending parsing.
+	flagArgs := args
+	var verbatim []string
+	if term := terminatorIndex(fs, args); term >= 0 {
+		flagArgs = args[:term]
+		verbatim = args[term+1:]
+	}
+	rest := flagArgs
 	for {
 		if err := fs.Parse(rest); err != nil {
 			return opt, err
@@ -149,6 +157,7 @@ func parseOptions(args []string) (options, error) {
 		opt.paths = append(opt.paths, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
+	opt.paths = append(opt.paths, verbatim...)
 
 	// Visit reports every flag given, so an explicit --season 0 is told apart
 	// from the default and a negative season is rejected instead of ignored.
@@ -197,6 +206,32 @@ func parseOptions(args []string) (options, error) {
 		return opt, err
 	}
 	return opt, nil
+}
+
+// terminatorIndex returns the index of the first bare "--" that ends flag
+// parsing, or -1. A "--" consumed as a value-flag argument is not a
+// terminator: "--title --" sets the title to "--". Whether a flag takes a
+// value is read from fs, so every spelling the flag package accepts ("-title",
+// "--t") is handled and new flags need no extra wiring.
+func terminatorIndex(fs *flag.FlagSet, args []string) int {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return i
+		}
+		if len(a) < 2 || a[0] != '-' || strings.Contains(a, "=") {
+			continue
+		}
+		f := fs.Lookup(strings.TrimLeft(a, "-"))
+		if f == nil {
+			continue
+		}
+		if b, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && b.IsBoolFlag() {
+			continue
+		}
+		i++ // the value flag consumes the next token
+	}
+	return -1
 }
 
 func parseExts(csv string) ([]string, error) {
@@ -318,6 +353,21 @@ func fileKey(p string) (string, error) {
 		return "", err
 	}
 	return key + string(filepath.Separator) + scopeKey(filepath.Base(p)), nil
+}
+
+// dirEntryKey identifies a directory entry (a folder rename source or target)
+// by its parent's dirKey plus the folded base name. The final component is
+// never resolved: a directory argument may itself be a symlink, and folder
+// renames act on that entry. Mixed spellings of the same physical target —
+// relative versus absolute, or through a symlinked parent — share one key.
+// Planned sources use the same helper so a chain through alternate spellings
+// stays valid.
+func dirEntryKey(p string) (string, error) {
+	parent, err := dirKey(filepath.Dir(p))
+	if err != nil {
+		return "", err
+	}
+	return parent + string(filepath.Separator) + scopeKey(filepath.Base(p)), nil
 }
 
 // scopeKey folds a file name for comparison: the supported platform has a
