@@ -42,12 +42,19 @@ type dirPlan struct {
 
 var (
 	// Group 1 is the text before the marker, group 2 the season, group 3 the
-	// run of episode markers. The marker must be bounded by non-alphanumerics.
-	seasonEpRe = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])s([0-9]{1,2})((?:e[0-9]{1,3})+)(?:[^\p{L}\p{N}]|$)`)
-	episodeRe  = regexp.MustCompile(`(?i)e([0-9]{1,3})`)
-	crossRe    = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])([0-9]{1,2})x([0-9]{1,3})(?:[^\p{L}\p{N}]|$)`)
-	spaceRe    = regexp.MustCompile(`\s+`)
-	seasonDir  = regexp.MustCompile(`(?i)^(?:season[\s._-]*|s)([0-9]{1,2})$`)
+	// run of episode markers: E01E02, E01.E02, E01-E02, or E01-02. The marker
+	// must be bounded by non-alphanumerics.
+	seasonEpRe = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])s([0-9]{1,2})(e[0-9]{1,3}(?:(?:[-.]?e|-)[0-9]{1,3})*)(?:[^\p{L}\p{N}]|$)`)
+	// episodeRe splits the run into pieces; group 1 is the separator before
+	// the piece, group 2 its number.
+	episodeRe = regexp.MustCompile(`(?i)([-.]?)e?([0-9]{1,3})`)
+	// crossRe is the 1x02 form; group 3 is the run: 1x01-02, 1x01-1x02, or
+	// 1x01.1x02.
+	crossRe = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])([0-9]{1,2})x([0-9]{1,3}(?:-(?:[0-9]{1,2}x)?[0-9]{1,3}|\.[0-9]{1,2}x[0-9]{1,3})*)(?:[^\p{L}\p{N}]|$)`)
+	// crossPieceRe splits a 1x02 run; group 1 is the separator, group 2 an
+	// optional repeated season, group 3 the episode.
+	crossPieceRe = regexp.MustCompile(`(?i)([-.]?)(?:([0-9]{1,2})x)?([0-9]{1,3})`)
+	spaceRe      = regexp.MustCompile(`\s+`)
 	// showSeasonRe finds a season-only marker ("S04", "Season 4") in a release
 	// folder name and the show text before it.
 	showSeasonRe = regexp.MustCompile(`(?i)^(.*?)(?:^|[^\p{L}\p{N}])(?:season[\s._-]*|s)([0-9]{1,2})(?:[^\p{L}\p{N}]|$)`)
@@ -63,7 +70,9 @@ var (
 	// ("Movie.1080p.WEB-DL") is not mistaken for a site tag.
 	siteTagRe = regexp.MustCompile(`(?i)^\s*(?:www\.\S*|\S*\.(?:com|net|org|info|biz|co|in|io|me|cc|ws|to|tv|xyz|top|site|online|club|live|life|lol|pw|fun|company|world|mx|se|ms|gs|vc))(?:\s*[:|–]\s*|\s+-\s*)\s*`)
 	// groupTagRe strips leading [...] and (...) release-group tags.
-	groupTagRe = regexp.MustCompile(`^\s*(?:\[[^\]]*\]|\([^)]*\))(?:\s*(?:\[[^\]]*\]|\([^)]*\)))*\s*`)
+	// A group only counts when whitespace follows it: "[REC].2007" and
+	// "(500).Days.Of.Summer" start with the title itself.
+	groupTagRe = regexp.MustCompile(`^\s*(?:\[[^\]]*\]|\([^)]*\))(?:\s*(?:\[[^\]]*\]|\([^)]*\)))*\s+`)
 
 	yearRe         = regexp.MustCompile(`[0-9]{4}`)
 	movieSeasonRe  = regexp.MustCompile(`(?i)\b(?:season\s?[0-9]{1,2}|s[0-9]{1,2})\b`)
@@ -98,6 +107,9 @@ var strongTokens = []string{
 	"xvid", "divx", "10bit", "hdr", "hdr10",
 	// audio
 	"aac", "ac3", "eac3", "ddp", "dd5.1", "dts", "atmos", "truehd", "flac",
+	"ddp5.1", "aac5.1", "dts5.1", "dd+5.1",
+	// resolution with frame rate
+	"2160p60", "1080p60", "720p60",
 	// subs
 	"esub", "esubs", "msub",
 }
@@ -133,31 +145,64 @@ var weakTokens = func() map[string]bool {
 
 type episodeInfo struct {
 	season   int
-	episodes []int
+	episodes []int  // nil when the marker cannot be represented safely
 	show     string // raw text before the marker
 }
 
-// detect finds an episode marker in a file stem.
+// detect finds an episode marker in a file stem. A dash between episode
+// numbers is a range (E01-E03 is 1, 2, 3); any other separator lists
+// episodes. A marker that cannot be represented safely, such as a descending
+// range or a 1x02 run that changes season, is still an episode but has nil
+// episodes, so callers skip it rather than truncate it.
 func detect(stem string) (episodeInfo, bool) {
 	if m := seasonEpRe.FindStringSubmatch(stem); m != nil {
 		info := episodeInfo{show: m[1]}
 		info.season, _ = strconv.Atoi(m[2])
+		var pieces [][2]string
 		for _, e := range episodeRe.FindAllStringSubmatch(m[3], -1) {
-			n, _ := strconv.Atoi(e[1])
-			info.episodes = append(info.episodes, n)
+			pieces = append(pieces, [2]string{e[1], e[2]})
 		}
-		if len(info.episodes) > 0 {
-			return info, true
-		}
+		info.episodes = expandEpisodes(pieces)
+		return info, true
 	}
 	if m := crossRe.FindStringSubmatch(stem); m != nil {
 		info := episodeInfo{show: m[1]}
 		info.season, _ = strconv.Atoi(m[2])
-		n, _ := strconv.Atoi(m[3])
-		info.episodes = []int{n}
+		var pieces [][2]string
+		for i, e := range crossPieceRe.FindAllStringSubmatch(m[3], -1) {
+			if e[2] != "" {
+				if n, _ := strconv.Atoi(e[2]); i == 0 || n != info.season {
+					return info, true // the run changes season: unsafe
+				}
+			}
+			pieces = append(pieces, [2]string{e[1], e[3]})
+		}
+		info.episodes = expandEpisodes(pieces)
 		return info, true
 	}
 	return episodeInfo{}, false
+}
+
+// expandEpisodes turns [separator, number] pieces into episode numbers. A "-"
+// separator closes a range from the previous number; a range that does not
+// ascend returns nil.
+func expandEpisodes(pieces [][2]string) []int {
+	var eps []int
+	for _, p := range pieces {
+		n, _ := strconv.Atoi(p[1])
+		if p[0] != "-" || len(eps) == 0 {
+			eps = append(eps, n)
+			continue
+		}
+		last := eps[len(eps)-1]
+		if n <= last {
+			return nil
+		}
+		for e := last + 1; e <= n; e++ {
+			eps = append(eps, e)
+		}
+	}
+	return eps
 }
 
 // detectShowSeason finds a season in a folder name. An episode marker counts as
@@ -301,9 +346,14 @@ func normalizeMovieTitle(s string) string {
 
 // trimMovieTitle trims separators from both edges and drops brackets left
 // empty or unbalanced by the cut. Brackets are matched on the whole title, so
-// "Movie (Director's Cut)" keeps its closing parenthesis.
+// "Movie (Director's Cut)" keeps its closing parenthesis and "(500) Days Of
+// Summer" keeps its opening one.
 func trimMovieTitle(s string) string {
-	s = strings.Trim(s, " -–_.([{")
+	s = strings.Trim(s, " -–_.")
+	for s != "" && strings.ContainsRune("([{", rune(s[0])) && !leadingBracketClosed(s) {
+		s = strings.TrimLeft(s[1:], " -–_.")
+	}
+	s = strings.TrimRight(s, " -–_.([{")
 	for s != "" {
 		switch s[len(s)-1] {
 		case '(', '[', '{':
@@ -317,6 +367,25 @@ func trimMovieTitle(s string) string {
 		s = strings.TrimRight(s[:len(s)-1], " -–_.([{")
 	}
 	return s
+}
+
+// leadingBracketClosed reports whether the opening bracket at s[0] has a
+// matching closing bracket: "(500) Days (" keeps its first parenthesis, while
+// the "(" of "(Movie (Cut)" was left dangling by a cut.
+func leadingBracketClosed(s string) bool {
+	depth := 0
+	for i := range s {
+		switch s[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+			if depth == 0 {
+				return bracketsBalanced(s[:i+1])
+			}
+		}
+	}
+	return false
 }
 
 // bracketsBalanced reports whether every closing bracket in s has a matching
@@ -384,21 +453,28 @@ func normalizeShow(s string) string {
 	return strings.Trim(s, " -")
 }
 
-// showFromDir is the last-resort show name: the directory, or its parent when
-// the directory is a season folder.
+// showFromDir is the last-resort show name, normalized like a marker title:
+// the show text of a release season folder ("Show.Name.S04.1080p" gives
+// "Show Name"), the parent of a bare season folder ("Season 04", "S04"), or
+// the directory itself.
 func showFromDir(dir string) string {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return filepath.Base(dir)
+		return normalizeShow(filepath.Base(dir))
 	}
 	base := filepath.Base(abs)
-	if seasonDir.MatchString(base) {
-		parent := filepath.Base(filepath.Dir(abs))
-		if parent != "/" && parent != "." && parent != base {
-			return parent
-		}
+	show, _, ok := detectShowSeason(base)
+	if !ok {
+		return normalizeShow(base)
 	}
-	return base
+	if title := normalizeShow(show); title != "" {
+		return title
+	}
+	parent := filepath.Base(filepath.Dir(abs))
+	if parent != "/" && parent != "." && parent != base {
+		return normalizeShow(parent)
+	}
+	return normalizeShow(base)
 }
 
 // validateTemplate rejects templates that cannot produce a plain file name.
@@ -760,6 +836,9 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 			}
 			v.target = renderMovie(o.template, title, m.year)
 		case isEpisode:
+			if info.episodes == nil {
+				continue // an unsafe marker is skipped, never truncated
+			}
 			show := o.title
 			if show == "" {
 				show = normalizeShow(info.show)

@@ -84,7 +84,12 @@ hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
    mode, not an extra pass: TV mode renames episodes with the two marker
    regexes (`SxxEyy`/`SxxEyyEzz`, then `1x02`) plus `normalizeShow`; movie mode
    renames movies with `detectMovie` and still runs `detect` as a skip guard, so
-   an episode is never renamed as a movie. In movie mode a directory named
+   an episode is never renamed as a movie. Multi-episode markers render every
+   episode (`E01E02`): a dash is a range (`E01-E03`, `E01-03`, `1x01-02`,
+   `1x01-1x02`), a dot lists (`E01.E02`, `1x01.1x02`). A descending range or a
+   `1x` run that changes season is skipped, never truncated. A show title taken
+   from the directory goes through `normalizeShow`, and a release season folder
+   supplies only its show text. In movie mode a directory named
    directly on the command line is renamed with the movie template when
    `detectMovie` accepts its base name; nested directories are never renamed,
    and files inside run first. In TV mode a directory named directly on the

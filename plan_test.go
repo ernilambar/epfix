@@ -78,6 +78,19 @@ func TestGoldenNames(t *testing.T) {
 		}, want: "Show Name S04E01.mkv"},
 		{name: "dir fallback", sub: "Some Show", file: "S01E01.mkv", want: "Some Show - S01E01.mkv"},
 		{name: "season folder fallback", sub: filepath.Join("Some Show", "Season 04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
+		{name: "short season folder fallback", sub: filepath.Join("Some Show", "S04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
+		{name: "dir fallback normalized", sub: "Show_Name", file: "S01E01.mkv", want: "Show Name - S01E01.mkv"},
+		{name: "release season folder fallback", sub: "Show.Name.S04.1080p.WEB-DL", file: "S04E01.mkv", want: "Show Name - S04E01.mkv"},
+		{name: "dash e range", file: "Show.S01E01-E02.1080p.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "dash range", file: "Show.S01E03-04.1080p.mkv", want: "Show - S01E03E04.mkv"},
+		{name: "dot list", file: "Show.S01E05.E06.1080p.mkv", want: "Show - S01E05E06.mkv"},
+		{name: "long range", file: "Show.S01E01-E03.mkv", want: "Show - S01E01E02E03.mkv"},
+		{name: "descending range skipped", file: "Show.S01E05-E03.mkv", want: ""},
+		{name: "dash before resolution", file: "Show.S01E01-720p.mkv", want: "Show - S01E01.mkv"},
+		{name: "x form range", file: "Show.1x01-02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form repeated range", file: "Show.1x01-1x02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form dot list", file: "Show.1x01.1x02.HDTV.mkv", want: "Show - S01E01E02.mkv"},
+		{name: "x form season change skipped", file: "Show.1x10-2x01.mkv", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,6 +120,50 @@ func TestGoldenNames(t *testing.T) {
 			}
 			if len(got) != 1 || got[0] != tt.want {
 				t.Fatalf("want [%s], got %v", tt.want, got)
+			}
+		})
+	}
+}
+
+// TestRenameIdempotent: planning a directory again after its renames are
+// applied plans nothing, so a second run never renames a file twice.
+func TestRenameIdempotent(t *testing.T) {
+	tests := []struct {
+		sub, file string
+		movies    bool
+	}{
+		{sub: "Show_Name", file: "S01E01.mkv"},
+		{sub: "Show.Name.S04.1080p.WEB-DL", file: "S04E01.mkv"},
+		{sub: "Some Show", file: "Show.S01E01-E02.1080p.mkv"},
+		{sub: "Some Show", file: "Show.1x01-1x02.HDTV.mkv"},
+		{sub: "Films", file: "[REC].2007.1080p.mkv", movies: true},
+		{sub: "Films", file: "(500).Days.Of.Summer.2009.1080p.mkv", movies: true},
+		{sub: "Films", file: "The.Guest.DDP5.1.1080p.mkv", movies: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.file, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), tt.sub)
+			writeFile(t, dir, tt.file)
+			o := testOptions()
+			if tt.movies {
+				o = movieOptions()
+			}
+			dp, err := planDir(dir, nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(dp.renames) != 1 || len(dp.conflicts) != 0 {
+				t.Fatalf("first run: want one rename, got %+v %+v", dp.renames, dp.conflicts)
+			}
+			if err := os.Rename(dp.renames[0].Source, dp.renames[0].Target); err != nil {
+				t.Fatal(err)
+			}
+			again, err := planDir(dir, nil, o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(again.renames) != 0 || len(again.conflicts) != 0 {
+				t.Fatalf("second run renamed %s: %+v %+v", filepath.Base(dp.renames[0].Target), again.renames, again.conflicts)
 			}
 		})
 	}
@@ -152,6 +209,31 @@ func TestGoldenMovieNames(t *testing.T) {
 			name:  "bracket group",
 			files: []string{"[YTS.MX] Movie (2020) [1080p].mkv"},
 			want:  []string{"Movie (2020).mkv"},
+		},
+		{
+			name:  "bracketed title glued to year",
+			files: []string{"[REC].2007.1080p.mkv"},
+			want:  []string{"[REC] (2007).mkv"},
+		},
+		{
+			name:  "parenthesized title start",
+			files: []string{"(500).Days.Of.Summer.2009.1080p.mkv"},
+			want:  []string{"(500) Days Of Summer (2009).mkv"},
+		},
+		{
+			name:  "glued audio channels",
+			files: []string{"The.Guest.DDP5.1.1080p.mkv"},
+			want:  []string{"The Guest.mkv"},
+		},
+		{
+			name:  "glued frame rate",
+			files: []string{"Some.Film.1080p60.x264.mkv"},
+			want:  []string{"Some Film.mkv"},
+		},
+		{
+			name:  "glued aac and dts channels",
+			files: []string{"Movie.Name.AAC5.1.mkv", "Other.Name.DTS5.1.mkv"},
+			want:  []string{"Movie Name.mkv", "Other Name.mkv"},
 		},
 		{
 			name:  "title number is not a year",
