@@ -533,6 +533,24 @@ func TestSidecarOwnership(t *testing.T) {
 	})
 }
 
+// TestSidecarCase: sidecar stems match case-insensitively, like scopeKey,
+// and keep their own suffix spelling.
+func TestSidecarCase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "Show.S01E01.1080p.mkv")
+	writeFile(t, dir, "show.s01e01.1080p.EN.srt")
+	dp, err := planDir(dir, nil, testOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := plannedTargets(dp)
+	sort.Strings(got)
+	want := []string{"Show - S01E01.EN.srt", "Show - S01E01.mkv"}
+	if len(dp.conflicts) != 0 || strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("want %v, got %v %+v", want, got, dp.conflicts)
+	}
+}
+
 func TestPlanConflicts(t *testing.T) {
 	t.Run("duplicate target", func(t *testing.T) {
 		dir := t.TempDir()
@@ -1225,6 +1243,8 @@ func TestInputScope(t *testing.T) {
 			{"--apply", "sub", "SUB"},
 			{"--apply", "sub", "link"},
 			{"--apply", "-r", "sub", "LINK"},
+			{"--apply", "-r", "link"},
+			{"--apply", "-r", "link", "sub"},
 			{"--apply", "sub/Show.S01E01.mkv", "SUB/show.s01e01.mkv"},
 		} {
 			t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -1244,6 +1264,31 @@ func TestInputScope(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
+		}
+	})
+
+	// Regression: WalkDir does not descend a symlinked root, so -r link
+	// planned nothing. Nested paths print under the typed spelling, and a
+	// symlinked subdirectory is still not followed.
+	t.Run("recursive symlink root", func(t *testing.T) {
+		chdirTemp(t)
+		writeFile(t, filepath.Join("real", "Season 01"), s01)
+		writeFile(t, "other", "Other.S01E01.mkv")
+		if err := os.Symlink("real", "link"); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join("..", "other"), filepath.Join("real", "inner")); err != nil {
+			t.Fatal(err)
+		}
+		var out, errOut bytes.Buffer
+		if code := run([]string{"-r", "link"}, &out, &errOut); code != 0 {
+			t.Fatalf("exit %d (%s)", code, errOut.String())
+		}
+		if !strings.Contains(out.String(), "1 rename, 0 conflicts") {
+			t.Fatalf("want one rename, got %s", out.String())
+		}
+		if !strings.Contains(out.String(), filepath.Join("link", "Season 01", s01)) {
+			t.Fatalf("path not printed under the typed spelling: %s", out.String())
 		}
 	})
 

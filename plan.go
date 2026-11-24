@@ -569,15 +569,30 @@ func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 		if !t.recursive {
 			continue
 		}
-		err := filepath.WalkDir(t.dir, func(path string, d fs.DirEntry, err error) error {
+		// WalkDir does not descend a symlinked root, so walk the resolved
+		// root and print each path under the user's spelling. Symlinked
+		// subdirectories are still not followed.
+		root, err := filepath.EvalSymlinks(t.dir)
+		if err != nil {
+			return nil, err
+		}
+		err = filepath.WalkDir(root, func(walked string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
 			if !d.IsDir() {
 				return nil
 			}
-			if path != t.dir && strings.HasPrefix(d.Name(), ".") {
+			if walked != root && strings.HasPrefix(d.Name(), ".") {
 				return fs.SkipDir
+			}
+			path := t.dir
+			if walked != root {
+				rel, err := filepath.Rel(root, walked)
+				if err != nil {
+					return err
+				}
+				path = filepath.Join(t.dir, rel)
 			}
 			key, err := dirKey(path)
 			if err != nil {
@@ -880,7 +895,9 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 		for _, name := range rest {
 			best := -1
 			for i, v := range detected {
-				if len(name) <= len(v.stem) || !strings.HasPrefix(name, v.stem) || name[len(v.stem)] != '.' {
+				// Folded like scopeKey, so show.s01e01.srt belongs to
+				// Show.S01E01.mkv; the original suffix is kept by slicing name.
+				if len(name) <= len(v.stem) || name[len(v.stem)] != '.' || scopeKey(name[:len(v.stem)]) != scopeKey(v.stem) {
 					continue
 				}
 				if best < 0 || len(v.stem) > len(detected[best].stem) ||
