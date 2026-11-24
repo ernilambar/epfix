@@ -183,20 +183,20 @@ func TestApplyRollbackLeftover(t *testing.T) {
 // folder first, then the folder is renamed, leaving one canonical path.
 func TestApplyMovieFolder(t *testing.T) {
 	root := t.TempDir()
-	const folder = "All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+	const folder = "Inception (2010) [720p] [BluRay] [YTS.MX]"
 	dir := filepath.Join(root, folder)
-	writeFile(t, dir, "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+	writeFile(t, dir, "Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
 
 	var out, errOut bytes.Buffer
 	if code := run([]string{"--movies", "--apply", dir}, &out, &errOut); code != 0 {
 		t.Fatalf("exit %d: %s%s", code, out.String(), errOut.String())
 	}
-	wantDir := filepath.Join(root, "All We Imagine As Light (2024)")
-	body, err := os.ReadFile(filepath.Join(wantDir, "All We Imagine As Light (2024).mp4"))
+	wantDir := filepath.Join(root, "Inception (2010)")
+	body, err := os.ReadFile(filepath.Join(wantDir, "Inception (2010).mp4"))
 	if err != nil {
 		t.Fatalf("folder or file not renamed: %v", err)
 	}
-	if string(body) != "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4" {
+	if string(body) != "Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4" {
 		t.Fatalf("content not preserved: %q", body)
 	}
 	if got := names(t, root); len(got) != 1 || got[0] != filepath.Base(wantDir) {

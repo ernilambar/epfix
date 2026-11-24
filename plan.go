@@ -465,10 +465,10 @@ func planPaths(targets []dirTarget, o options) ([]dirPlan, error) {
 
 // planMovieFolders plans the movie folders named directly on the command line.
 // A whole-directory target is renamed with the movie template when its own
-// base name looks like a release name, so "All We Imagine As Light (2024)
-// [720p] [BluRay] [YTS.MX]" becomes "All We Imagine As Light (2024)". Files
-// inside are planned by planDir; a nested directory is never renamed, because
-// only the arguments themselves name their folder. It never writes.
+// base name looks like a release name, so "Inception (2010) [720p] [BluRay]
+// [YTS.MX]" becomes "Inception (2010)". Files inside are planned by planDir; a
+// nested directory is never renamed, because only the arguments themselves
+// name their folder. It never writes.
 func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, error) {
 	if !o.movies {
 		return nil, nil, nil

@@ -1212,14 +1212,14 @@ func TestMovieTitleOverride(t *testing.T) {
 // line is renamed with the movie template, while nested directories are not.
 func TestMovieFolderRename(t *testing.T) {
 	const (
-		folder = "All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
-		want   = "All We Imagine As Light (2024)"
+		folder = "Inception (2010) [720p] [BluRay] [YTS.MX]"
+		want   = "Inception (2010)"
 	)
 	seed := func(t *testing.T) string {
 		t.Helper()
 		root := t.TempDir()
 		dir := filepath.Join(root, folder)
-		writeFile(t, dir, "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+		writeFile(t, dir, "Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
 		return dir
 	}
 
@@ -1229,7 +1229,7 @@ func TestMovieFolderRename(t *testing.T) {
 			t.Fatalf("exit %d", code)
 		}
 		wantRenames(t, renames,
-			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", want + ".mp4"},
+			[2]string{"Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", want + ".mp4"},
 			[2]string{folder, want})
 	})
 
@@ -1246,8 +1246,8 @@ func TestMovieFolderRename(t *testing.T) {
 			t.Fatalf("exit %d", code)
 		}
 		wantRenames(t, renames,
-			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name (2024).mp4"},
-			[2]string{folder, "Forced Name (2024)"})
+			[2]string{"Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name (2010).mp4"},
+			[2]string{folder, "Forced Name (2010)"})
 	})
 
 	t.Run("episode folder is left alone", func(t *testing.T) {
@@ -1263,7 +1263,7 @@ func TestMovieFolderRename(t *testing.T) {
 
 	t.Run("nested folder is left alone", func(t *testing.T) {
 		root := t.TempDir()
-		writeFile(t, filepath.Join(root, folder), "All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
+		writeFile(t, filepath.Join(root, folder), "Inception.2010.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4")
 		renames, _, code := planLines(t, []string{"--movies", root})
 		if code != 0 {
 			t.Fatalf("exit %d", code)

@@ -49,7 +49,7 @@ epfix --apply --title "Jack Ryan" ~/Downloads/Show.S04
                                                 # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies --apply ~/Downloads/Movies       # rename movies
-epfix --movies --apply ~/"Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+epfix --movies --apply ~/"Movies/Inception (2010) [720p] [BluRay] [YTS.MX]"
                                                 # rename the folder and its file
 epfix --apply ~/Downloads/Show.Name.S04.1080p.WEB-DL
                                                 # rename it to Show Name - S04
