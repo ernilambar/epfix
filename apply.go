@@ -9,35 +9,6 @@ import (
 	"strings"
 )
 
-// leftover is a file a rollback left parked under a temporary name, either
-// because moving it back failed or because its source name is now taken.
-type leftover struct {
-	temp   string
-	source string
-}
-
-// applyError is an apply failure plus the files that could not be put back.
-type applyError struct {
-	err      error
-	leftover []leftover
-}
-
-func (e *applyError) Error() string {
-	if len(e.leftover) == 0 {
-		return e.err.Error()
-	}
-	var b strings.Builder
-	b.WriteString(e.err.Error())
-	b.WriteString(" (not restored:")
-	for _, l := range e.leftover {
-		fmt.Fprintf(&b, " %s is at %s;", l.source, l.temp)
-	}
-	b.WriteString(" move it back by hand)")
-	return b.String()
-}
-
-func (e *applyError) Unwrap() error { return e.err }
-
 // applyDir moves a plan in two phases: every source to a unique temporary
 // name, then every temporary to its target. This makes chains and case-only
 // renames safe. On a mid-flight error the completed prefix stays applied and
@@ -65,39 +36,38 @@ func applyDir(dp dirPlan) ([]rename, error) {
 			}
 		}
 		if err != nil {
-			return nil, &applyError{err: err, leftover: rollback(dp.renames[:i], staged[:i])}
+			return nil, rollback(err, dp.renames[:i], staged[:i])
 		}
 		staged[i] = tmp
 	}
 
 	for i, r := range dp.renames {
 		if err := os.Rename(staged[i], r.Target); err != nil {
-			left := rollback(dp.renames[i:], staged[i:])
-			return dp.renames[:i], &applyError{err: err, leftover: left}
+			return dp.renames[:i], rollback(err, dp.renames[i:], staged[i:])
 		}
 		staged[i] = ""
 	}
 	return dp.renames, nil
 }
 
-// rollback moves staged files back to their sources, last first. A source that
-// is occupied is never overwritten: the file is reported as a leftover instead,
-// so both files survive and the user can finish the move by hand.
-func rollback(rs []rename, staged []string) []leftover {
-	var left []leftover
+// rollback moves staged files back to their sources, last first, and returns
+// err. A source that is occupied is never overwritten: os.Rename would replace
+// the occupant, so the file stays at its temporary name and err names it.
+func rollback(err error, rs []rename, staged []string) error {
+	var stranded []string
 	for i := len(rs) - 1; i >= 0; i-- {
 		if staged[i] == "" {
 			continue
 		}
-		if _, err := os.Lstat(rs[i].Source); !errors.Is(err, os.ErrNotExist) {
-			left = append(left, leftover{temp: staged[i], source: rs[i].Source})
+		if _, statErr := os.Lstat(rs[i].Source); errors.Is(statErr, os.ErrNotExist) && os.Rename(staged[i], rs[i].Source) == nil {
 			continue
 		}
-		if err := os.Rename(staged[i], rs[i].Source); err != nil {
-			left = append(left, leftover{temp: staged[i], source: rs[i].Source})
-		}
+		stranded = append(stranded, fmt.Sprintf("%s is at %s", rs[i].Source, staged[i]))
 	}
-	return left
+	if len(stranded) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w (not restored: %s; move it back by hand)", err, strings.Join(stranded, "; "))
 }
 
 // applyDirRenames applies folder renames in batches of siblings, deepest

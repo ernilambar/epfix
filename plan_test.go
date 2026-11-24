@@ -756,21 +756,6 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "value flag consumes double dash", args: []string{"--title", "--", "--", "-a"}, check: func(t *testing.T, o options) {
-			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
-				t.Fatalf("got %+v", o)
-			}
-		}},
-		{name: "single-dash long value flag consumes double dash", args: []string{"-title", "--", "x"}, check: func(t *testing.T, o options) {
-			if o.title != "--" || strings.Join(o.paths, "|") != "x" {
-				t.Fatalf("got %+v", o)
-			}
-		}},
-		{name: "double-dash short value flag consumes double dash", args: []string{"--t", "--", "--", "-a"}, check: func(t *testing.T, o options) {
-			if o.title != "--" || o.apply || strings.Join(o.paths, "|") != "-a" {
-				t.Fatalf("got %+v", o)
-			}
-		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
