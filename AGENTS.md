@@ -53,9 +53,12 @@ The version is never edited in source: `main.version` defaults to `dev` and the
 git tag supplies the release version (`-X main.version=${GITHUB_REF_NAME#v}` in
 `release.yml`). Cutting a release touches two files:
 
-1. `CHANGELOG.md` — add `## X.Y.Z - YYYY-MM-DD` plus bullets at the top, commit.
-2. The tag — `git tag vX.Y.Z && git push origin vX.Y.Z` builds and publishes
-   `epfix-darwin-arm64`.
+1. `CHANGELOG.md` — add `## X.Y.Z - YYYY-MM-DD` plus bullets at the top,
+   validate with `npx @nilambar/flatlog validate`.
+2. The tag — a `vX.Y.Z` tag builds and publishes `epfix-darwin-arm64`.
+
+The user commits, tags, and pushes. Never run `git commit`, `git tag`, or
+`git push`.
 
 Packaging is a separate concern handled outside this repository. Do not
 hard-code a version in `main.go`, `README.md`, or a badge: the tag and the

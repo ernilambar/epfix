@@ -1,13 +1,11 @@
 # Changelog
 
-## X.X.X - YYYY-MM-DD
-- Added: short flags `-a`, `-m`, `-t`, `-s`, `-e`, and `-V`
+## 0.1.3 - 2026-11-24
+- Added: short flags for arguments
 - Added: multi-episode ranges such as `S01E01-E03` and `1x01-02`
-- Fixed: `--apply` after `--` triggered a rename
-- Fixed: two folders renamed to one target could partly apply
-- Fixed: sidecars renamed twice or left behind
+- Changed: drop unused args
 - Fixed: `--movies` renamed episode files and folders
-- Removed: `--template`, `--sidecars`, `--no-sidecars`, `--ext`, `--quiet`, and `-r`/`--recursive`
+- Fixed: two folders renamed to one target could partly apply
 
 ## 0.1.2 - 2026-11-14
 - Added: rename movie folders named as path arguments in `--movies` mode
