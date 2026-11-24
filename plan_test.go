@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -257,6 +258,32 @@ func TestGoldenMovieNames(t *testing.T) {
 			files: []string{"[SubsPlease] Frieren - 12 (1080p).mkv"},
 		},
 		{
+			name:  "anime version",
+			files: []string{"[Grp] Show - 12v2 [1080p].mkv"},
+		},
+		{
+			name:  "anime range",
+			files: []string{"[Grp] Show - 12-13 [1080p].mkv"},
+		},
+		{
+			name:  "anime en-dash version",
+			files: []string{"[Grp] Show – 12v2 [1080p].mkv"},
+		},
+		{
+			name:  "anime en-dash range",
+			files: []string{"[Grp] Show – 12–13 [1080p].mkv"},
+		},
+		{
+			name:  "numbered title",
+			files: []string{"The.Taking.of.Pelham.123.2009.1080p.mkv"},
+			want:  []string{"The Taking of Pelham 123 (2009).mkv"},
+		},
+		{
+			name:  "numbered title with dash",
+			files: []string{"Mission - Impossible 2 (2000) [1080p].mkv"},
+			want:  []string{"Mission - Impossible 2 (2000).mkv"},
+		},
+		{
 			name:  "episode words",
 			files: []string{"Show.Ep.12.720p.mkv"},
 		},
@@ -360,6 +387,68 @@ func TestSidecars(t *testing.T) {
 	if got := plannedTargets(dp); len(got) != 1 || got[0] != "Show Name - S04E01.mkv" {
 		t.Fatalf("--no-sidecars planned %v", got)
 	}
+}
+
+// TestSidecarOwnership: each sidecar belongs to exactly one video, so two
+// videos sharing a stem rename it once, and an out-of-scope video never
+// donates or steals a sidecar.
+func TestSidecarOwnership(t *testing.T) {
+	seed := func(t *testing.T, files ...string) string {
+		t.Helper()
+		dir := t.TempDir()
+		for _, name := range files {
+			writeFile(t, dir, name)
+		}
+		return dir
+	}
+	plan := func(t *testing.T, dir string, scope ...string) dirPlan {
+		t.Helper()
+		var names map[string]bool
+		if len(scope) > 0 {
+			names = map[string]bool{}
+			for _, n := range scope {
+				names[scopeKey(n)] = true
+			}
+		}
+		dp, err := planDir(dir, names, testOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(dp.conflicts) != 0 {
+			t.Fatalf("unexpected conflicts: %+v", dp.conflicts)
+		}
+		return dp
+	}
+	want := func(t *testing.T, dp dirPlan, want ...string) {
+		t.Helper()
+		got := plannedTargets(dp)
+		sort.Strings(got)
+		sort.Strings(want)
+		if strings.Join(got, "|") != strings.Join(want, "|") {
+			t.Fatalf("want %v, got %v", want, got)
+		}
+	}
+	shared := []string{"Show.S01E01.mkv", "Show.S01E01.mp4", "Show.S01E01.en.srt"}
+
+	t.Run("shared stem renames sidecar once", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...))
+		want(t, dp, "Show - S01E01.mkv", "Show - S01E01.mp4", "Show - S01E01.en.srt")
+	})
+
+	t.Run("file-scoped mkv keeps its sidecar", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...), "Show.S01E01.mkv")
+		want(t, dp, "Show - S01E01.mkv", "Show - S01E01.en.srt")
+	})
+
+	t.Run("file-scoped mp4 keeps its sidecar", func(t *testing.T) {
+		dp := plan(t, seed(t, shared...), "Show.S01E01.mp4")
+		want(t, dp, "Show - S01E01.mp4", "Show - S01E01.en.srt")
+	})
+
+	t.Run("out-of-scope longer stem keeps its sidecar", func(t *testing.T) {
+		dir := seed(t, "Show.S01E01.mkv", "Show.S01E01.720p.mkv", "Show.S01E01.720p.srt")
+		want(t, plan(t, dir, "Show.S01E01.mkv"), "Show - S01E01.mkv")
+	})
 }
 
 func TestPlanConflicts(t *testing.T) {
@@ -1186,6 +1275,17 @@ func TestMovieFolderRename(t *testing.T) {
 		wantRenames(t, renames,
 			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name.mp4"},
 			[2]string{folder, "Forced Name"})
+	})
+
+	t.Run("episode folder is left alone", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "Show.Name.S01E05.1080p")
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		renames, _, code := planLines(t, []string{"--movies", dir})
+		if code != 0 || len(renames) != 0 {
+			t.Fatalf("exit %d, renames %v", code, renames)
+		}
 	})
 
 	t.Run("nested folder is left alone", func(t *testing.T) {

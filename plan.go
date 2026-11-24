@@ -68,7 +68,9 @@ var (
 	yearRe         = regexp.MustCompile(`[0-9]{4}`)
 	movieSeasonRe  = regexp.MustCompile(`(?i)\b(?:season\s?[0-9]{1,2}|s[0-9]{1,2})\b`)
 	movieEpisodeRe = regexp.MustCompile(`(?i)\b(?:ep|episode|e)\s?[0-9]{1,4}\b`)
-	movieAnimeRe   = regexp.MustCompile(`(?i)\s[-–]\s?[0-9]{1,4}$`)
+	// movieAnimeRe marks an anime episode number at the end of a title:
+	// "Show - 12", a version "Show - 12v2", or a range "Show - 12-13".
+	movieAnimeRe = regexp.MustCompile(`(?i)\s[-–]\s?[0-9]{1,4}(?:v[0-9]{1,2}|\s?[-–]\s?[0-9]{1,4})?$`)
 	// movieExtraRe marks a sample or trailer, which would otherwise take the
 	// movie's own name and collide with it.
 	movieExtraRe = regexp.MustCompile(`(?i)\b(?:sample|trailer)\b`)
@@ -553,6 +555,9 @@ func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, err
 		}
 		src := filepath.Clean(t.dir)
 		base := filepath.Base(src)
+		if _, isEpisode := detect(base); isEpisode {
+			continue // an episode folder is never renamed as a movie
+		}
 		m, ok := detectMovie(base, o.maxYear)
 		if !ok {
 			continue
@@ -781,19 +786,30 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 	}
 
 	// Sidecars are files that share a video's stem, matched by the longest
-	// stem. Matched against every detected video, before the scope filter:
+	// stem. Each sidecar is owned by exactly one detected video, so two
+	// videos with one stem (Show.S01E01.mkv and .mp4) rename it once.
+	// Matched against every detected video, before the scope filter:
 	// filtering first would let an in-scope Show.S01E01.mkv steal
-	// Show.S01E01.720p.srt from an out-of-scope Show.S01E01.720p.mkv.
-	sidecars := map[string][]string{}
+	// Show.S01E01.720p.srt from an out-of-scope Show.S01E01.720p.mkv. Among
+	// equal stems an in-scope video wins; their targets are identical, so the
+	// choice only decides whether the sidecar moves with an in-scope video.
+	inScope := func(v video) bool {
+		return names == nil || names[scopeKey(v.name)]
+	}
+	sidecars := make([][]string, len(detected))
 	if o.sidecars {
 		for _, name := range rest {
-			best := ""
-			for _, v := range detected {
-				if len(name) > len(v.stem) && strings.HasPrefix(name, v.stem) && name[len(v.stem)] == '.' && len(v.stem) > len(best) {
-					best = v.stem
+			best := -1
+			for i, v := range detected {
+				if len(name) <= len(v.stem) || !strings.HasPrefix(name, v.stem) || name[len(v.stem)] != '.' {
+					continue
+				}
+				if best < 0 || len(v.stem) > len(detected[best].stem) ||
+					(len(v.stem) == len(detected[best].stem) && inScope(v) && !inScope(detected[best])) {
+					best = i
 				}
 			}
-			if best != "" {
+			if best >= 0 {
 				sidecars[best] = append(sidecars[best], name)
 			}
 		}
@@ -801,16 +817,14 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 
 	// Apply the scope: drop out-of-scope videos, their sidecars, and their
 	// conflicts. An out-of-scope sibling must not abort the run.
-	inScope := func(v video) bool {
-		return names == nil || names[scopeKey(v.name)]
-	}
 	var kept []video
-	for _, v := range detected {
+	var keptSidecars [][]string
+	for i, v := range detected {
 		if !inScope(v) {
-			delete(sidecars, v.stem)
 			continue
 		}
 		kept = append(kept, v)
+		keptSidecars = append(keptSidecars, sidecars[i])
 	}
 	for _, c := range invalid {
 		if names == nil || names[scopeKey(filepath.Base(c.source))] {
@@ -818,14 +832,14 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 		}
 	}
 
-	for _, v := range kept {
+	for i, v := range kept {
 		if v.target+"."+v.ext != v.name {
 			dp.renames = append(dp.renames, rename{
 				Source: filepath.Join(dir, v.name),
 				Target: filepath.Join(dir, v.target+"."+v.ext),
 			})
 		}
-		for _, sc := range sidecars[v.stem] {
+		for _, sc := range keptSidecars[i] {
 			target := v.target + sc[len(v.stem):]
 			if target == sc {
 				continue
