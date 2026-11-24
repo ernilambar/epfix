@@ -499,6 +499,18 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
+		{name: "short aliases", args: []string{"-a", "-t", "Show", "-s", "2", "-e", "mkv", "-V", "dir"}, check: func(t *testing.T, o options) {
+			if !o.apply || o.title != "Show" || !o.seasonSet || o.season != 2 || strings.Join(o.exts, ",") != "mkv" || !o.version {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "short movies", args: []string{"-m"}, check: func(t *testing.T, o options) {
+			if !o.movies || o.template != defaultMovieTemplate {
+				t.Fatalf("got %+v", o)
+			}
+		}},
+		{name: "short negative season", args: []string{"-s", "-1"}, wantErr: true},
+		{name: "short repeated ext", args: []string{"-e", "mkv", "--ext", "mp4"}, wantErr: true},
 		{name: "ext list", args: []string{"--ext", ".MKV, mp4"}, check: func(t *testing.T, o options) {
 			if strings.Join(o.exts, ",") != "mkv,mp4" {
 				t.Fatalf("got %v", o.exts)

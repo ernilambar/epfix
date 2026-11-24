@@ -23,19 +23,19 @@ is renamed too; in TV mode, a directory argument that names a season is
 renamed to "Show Name - S01" (or "Season 01" inside its show folder).
 
 options:
-      --apply                rename files (default: print the plan)
-      --movies               rename movies instead of TV episodes
+  -a, --apply                rename files (default: print the plan)
+  -m, --movies               rename movies instead of TV episodes
       --template text        output name template (default "{title} - S{season}E{episode}",
                              with --movies "{title} ({year})")
-      --title text           force the title (series name, or movie title with --movies)
-      --season int           force the season number, zero or positive (TV mode)
+  -t, --title text           force the title (series name, or movie title with --movies)
+  -s, --season int           force the season number, zero or positive (TV mode)
   -r, --recursive            recurse into subdirectories
       --sidecars             rename sidecar files (default)
       --no-sidecars          leave sidecar files alone
-      --ext list             comma-separated video extensions, given once
+  -e, --ext list             comma-separated video extensions, given once
                              (default "mkv,mp4,m4v,avi,mov,ts,webm")
   -q, --quiet                print the summary only
-      --version              print the version
+  -V, --version              print the version
   -h, --help                 print this help
 
 exit codes: 0 success or clean plan, 1 conflicts or rename failure, 2 usage error.
@@ -115,18 +115,24 @@ func parseOptions(args []string) (options, error) {
 	exts := extFlag{list: strings.Join(defaultExts(), ",")}
 	var noSidecars bool
 	fs.BoolVar(&opt.apply, "apply", false, "")
+	fs.BoolVar(&opt.apply, "a", false, "")
 	fs.BoolVar(&opt.movies, "movies", false, "")
+	fs.BoolVar(&opt.movies, "m", false, "")
 	fs.StringVar(&opt.template, "template", "", "")
 	fs.StringVar(&opt.title, "title", "", "")
+	fs.StringVar(&opt.title, "t", "", "")
 	fs.IntVar(&season, "season", 0, "")
+	fs.IntVar(&season, "s", 0, "")
 	fs.BoolVar(&opt.recursive, "recursive", false, "")
 	fs.BoolVar(&opt.recursive, "r", false, "")
 	fs.BoolVar(&opt.sidecars, "sidecars", true, "")
 	fs.BoolVar(&noSidecars, "no-sidecars", false, "")
 	fs.Var(&exts, "ext", "")
+	fs.Var(&exts, "e", "")
 	fs.BoolVar(&opt.quiet, "quiet", false, "")
 	fs.BoolVar(&opt.quiet, "q", false, "")
 	fs.BoolVar(&opt.version, "version", false, "")
+	fs.BoolVar(&opt.version, "V", false, "")
 	fs.BoolVar(&opt.help, "help", false, "")
 	fs.BoolVar(&opt.help, "h", false, "")
 
@@ -151,7 +157,7 @@ func parseOptions(args []string) (options, error) {
 		switch f.Name {
 		case "template":
 			templateSet = true
-		case "season":
+		case "season", "s":
 			seasonGiven = true
 		}
 	})
