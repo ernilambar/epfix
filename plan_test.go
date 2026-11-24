@@ -10,20 +10,13 @@ import (
 )
 
 func testOptions() options {
-	return options{
-		template: defaultTemplate,
-		maxYear:  2027,
-		sidecars: true,
-		exts:     defaultExts(),
-	}
+	return options{maxYear: 2027}
 }
 
-// movieOptions is testOptions in movie mode: the mode picks the template
-// vocabulary and default, as parseOptions does.
+// movieOptions is testOptions in movie mode.
 func movieOptions() options {
 	o := testOptions()
 	o.movies = true
-	o.template = defaultMovieTemplate
 	return o
 }
 
@@ -73,9 +66,6 @@ func TestGoldenNames(t *testing.T) {
 		{name: "three digit season", file: "Show.S104E01.mkv", want: ""},
 		{name: "forced title", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.title = "Jack Ryan" }, want: "Jack Ryan - S04E01.mkv"},
 		{name: "forced season", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) { o.season, o.seasonSet = 2, true }, want: "Show Name - S02E01.mkv"},
-		{name: "custom template", file: "Show.Name.S04E01.1080p.mkv", setup: func(o *options) {
-			o.template = "{title} S{season}E{episode}"
-		}, want: "Show Name S04E01.mkv"},
 		{name: "dir fallback", sub: "Some Show", file: "S01E01.mkv", want: "Some Show - S01E01.mkv"},
 		{name: "season folder fallback", sub: filepath.Join("Some Show", "Season 04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
 		{name: "short season folder fallback", sub: filepath.Join("Some Show", "S04"), file: "S04E02.mkv", want: "Some Show - S04E02.mkv"},
@@ -460,15 +450,6 @@ func TestSidecars(t *testing.T) {
 			t.Fatalf("want %v, got %v", want, got)
 		}
 	}
-	o := testOptions()
-	o.sidecars = false
-	dp, err = planDir(dir, nil, o)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := plannedTargets(dp); len(got) != 1 || got[0] != "Show Name - S04E01.mkv" {
-		t.Fatalf("--no-sidecars planned %v", got)
-	}
 }
 
 // TestSidecarOwnership: each sidecar belongs to exactly one video, so two
@@ -597,10 +578,9 @@ func TestPlanConflicts(t *testing.T) {
 
 	t.Run("empty output name", func(t *testing.T) {
 		dir := t.TempDir()
-		writeFile(t, dir, "S01E01.mkv")
-		o := testOptions()
-		o.template = " "
-		o.title = " " // overrides the directory fallback
+		writeFile(t, dir, "Some.Movie.1080p.mkv")
+		o := movieOptions()
+		o.title = " " // no year, so the name renders empty
 		dp, err := planDir(dir, nil, o)
 		if err != nil {
 			t.Fatal(err)
@@ -669,67 +649,40 @@ func TestParseOptions(t *testing.T) {
 		wantErr bool
 		check   func(*testing.T, options)
 	}{
-		{name: "template separator", args: []string{"--template", "{title}/{season}"}, wantErr: true},
-		{name: "unknown token", args: []string{"--template", "{bogus}"}, wantErr: true},
-		{name: "malformed token", args: []string{"--template", "{show"}, wantErr: true},
-		{name: "empty template", args: []string{"--template", ""}, wantErr: true},
 		{name: "unknown flag", args: []string{"--nope"}, wantErr: true},
 		{name: "negative season", args: []string{"--season", "-5"}, wantErr: true},
 		{name: "minus one season", args: []string{"--season", "-1"}, wantErr: true},
-		{name: "repeated ext", args: []string{"--ext", "mkv", "--ext", "mp4"}, wantErr: true},
-		{name: "empty ext", args: []string{"--ext", " , "}, wantErr: true},
 		{name: "flags after path", args: []string{"dir", "--apply"}, check: func(t *testing.T, o options) {
 			if !o.apply || len(o.paths) != 1 || o.paths[0] != "dir" {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "aliases", args: []string{"-r", "-q", "--no-sidecars", "dir"}, check: func(t *testing.T, o options) {
-			if !o.recursive || !o.quiet || o.sidecars {
+		{name: "aliases", args: []string{"-r", "dir"}, check: func(t *testing.T, o options) {
+			if !o.recursive {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "short aliases", args: []string{"-a", "-t", "Show", "-s", "2", "-e", "mkv", "-V", "dir"}, check: func(t *testing.T, o options) {
-			if !o.apply || o.title != "Show" || !o.seasonSet || o.season != 2 || strings.Join(o.exts, ",") != "mkv" || !o.version {
+		{name: "short aliases", args: []string{"-a", "-t", "Show", "-s", "2", "-V", "dir"}, check: func(t *testing.T, o options) {
+			if !o.apply || o.title != "Show" || !o.seasonSet || o.season != 2 || !o.version {
 				t.Fatalf("got %+v", o)
 			}
 		}},
 		{name: "short movies", args: []string{"-m"}, check: func(t *testing.T, o options) {
-			if !o.movies || o.template != defaultMovieTemplate {
+			if !o.movies {
 				t.Fatalf("got %+v", o)
 			}
 		}},
 		{name: "short negative season", args: []string{"-s", "-1"}, wantErr: true},
-		{name: "short repeated ext", args: []string{"-e", "mkv", "--ext", "mp4"}, wantErr: true},
-		{name: "ext list", args: []string{"--ext", ".MKV, mp4"}, check: func(t *testing.T, o options) {
-			if strings.Join(o.exts, ",") != "mkv,mp4" {
-				t.Fatalf("got %v", o.exts)
-			}
-		}},
 		{name: "season zero", args: []string{"--season", "0"}, check: func(t *testing.T, o options) {
 			if !o.seasonSet || o.season != 0 {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "tv template default", check: func(t *testing.T, o options) {
-			if o.movies || o.template != defaultTemplate {
-				t.Fatalf("got %+v", o)
-			}
-		}},
-		{name: "tv template rejects movie tokens", args: []string{"--template", "{title} {year}"}, wantErr: true},
 		{name: "movies", args: []string{"--movies"}, check: func(t *testing.T, o options) {
-			if !o.movies || o.template != defaultMovieTemplate {
+			if !o.movies {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "movies template", args: []string{"--movies", "--template", "{title} - {year}"}, check: func(t *testing.T, o options) {
-			if o.template != "{title} - {year}" {
-				t.Fatalf("got %q", o.template)
-			}
-		}},
-		{name: "movies rejects tv tokens", args: []string{"--movies", "--template", "{title} S{season}"}, wantErr: true},
-		{name: "movies rejects bogus token", args: []string{"--movies", "--template", "{bogus}"}, wantErr: true},
-		{name: "movies rejects separator", args: []string{"--movies", "--template", "{title}/{year}"}, wantErr: true},
-		{name: "movies rejects empty template", args: []string{"--movies", "--template", ""}, wantErr: true},
 		{name: "movies title", args: []string{"--movies", "--title", "Jailer 2"}, check: func(t *testing.T, o options) {
 			if o.title != "Jailer 2" {
 				t.Fatalf("got %q", o.title)
@@ -751,8 +704,8 @@ func TestParseOptions(t *testing.T) {
 				t.Fatalf("got %+v", o)
 			}
 		}},
-		{name: "terminator preserves path order", args: []string{"a", "-q", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
-			if !o.quiet || strings.Join(o.paths, "|") != "a|b|c|-d" {
+		{name: "terminator preserves path order", args: []string{"a", "-r", "b", "--", "c", "-d"}, check: func(t *testing.T, o options) {
+			if !o.recursive || strings.Join(o.paths, "|") != "a|b|c|-d" {
 				t.Fatalf("got %+v", o)
 			}
 		}},
@@ -1210,17 +1163,6 @@ func TestInputScope(t *testing.T) {
 		}
 	})
 
-	t.Run("quiet suppresses the notice", func(t *testing.T) {
-		dir := seed(t, "Random.mkv")
-		_, stderr, code := planLines(t, []string{"-q", filepath.Join(dir, "Random.mkv")})
-		if code != 0 {
-			t.Fatalf("want exit 0, got %d", code)
-		}
-		if stderr != "" {
-			t.Fatalf("quiet printed %q", stderr)
-		}
-	})
-
 	// Regression: case-variant and symlinked spellings of one directory used
 	// to plan it twice, so --apply moved the first copy and then failed.
 	t.Run("same directory through case and symlink spellings", func(t *testing.T) {
@@ -1379,14 +1321,14 @@ func TestMovieFolderRename(t *testing.T) {
 		}
 	})
 
-	t.Run("template and forced title", func(t *testing.T) {
-		renames, _, code := planLines(t, []string{"--movies", "--template", "{title}", "--title", "Forced Name", seed(t)})
+	t.Run("forced title", func(t *testing.T) {
+		renames, _, code := planLines(t, []string{"--movies", "--title", "Forced Name", seed(t)})
 		if code != 0 {
 			t.Fatalf("exit %d", code)
 		}
 		wantRenames(t, renames,
-			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name.mp4"},
-			[2]string{folder, "Forced Name"})
+			[2]string{"All.We.Imagine.As.Light.2024.720p.BluRay.x264.AAC5.1-[YTS.MX].mp4", "Forced Name (2024).mp4"},
+			[2]string{folder, "Forced Name (2024)"})
 	})
 
 	t.Run("episode folder is left alone", func(t *testing.T) {
@@ -1619,43 +1561,34 @@ func TestFolderTargetIdentity(t *testing.T) {
 
 func TestRenderMovie(t *testing.T) {
 	tests := []struct {
-		template string
-		title    string
-		year     int
-		want     string
+		title string
+		year  int
+		want  string
 	}{
-		{defaultMovieTemplate, "Jailer 2", 2026, "Jailer 2 (2026)"},
-		{defaultMovieTemplate, "Jailer 2", 0, "Jailer 2"},
-		{"[{year}] {title}", "Jailer 2", 0, "Jailer 2"},
-		{"{title} - {year}", "Jailer 2", 0, "Jailer 2"},
-		{"{title}({year})", "Movie", 0, "Movie"},
-		{"{year} {title}", "Jailer 2", 2026, "2026 Jailer 2"},
-		{"[{year}] {title}", "Jailer 2", 2026, "[2026] Jailer 2"},
+		{"Jailer 2", 2026, "Jailer 2 (2026)"},
+		{"Jailer 2", 0, "Jailer 2"},
 	}
 	for _, tt := range tests {
-		if got := renderMovie(tt.template, tt.title, tt.year); got != tt.want {
-			t.Errorf("%q: want %q, got %q", tt.template, tt.want, got)
+		if got := renderMovie(tt.title, tt.year); got != tt.want {
+			t.Errorf("%q %d: want %q, got %q", tt.title, tt.year, tt.want, got)
 		}
 	}
 }
 
-func TestRenderTemplate(t *testing.T) {
+func TestRenderEpisode(t *testing.T) {
 	tests := []struct {
-		template string
-		show     string
-		season   int
-		eps      []int
-		want     string
+		show   string
+		season int
+		eps    []int
+		want   string
 	}{
-		{defaultTemplate, "Show Name", 4, []int{1}, "Show Name - S04E01"},
-		{defaultTemplate, "Show Name", 4, []int{3, 4}, "Show Name - S04E03E04"},
-		{"{title} S{season}E{episode}", "Show Name", 12, []int{2}, "Show Name S12E02"},
-		{"  {title}   {season}  ", " Show  Name ", 1, []int{9}, "Show Name 01"},
-		{"S{season}E{episode} {title}", "Show", 0, []int{3}, "S00E03 Show"},
+		{"Show Name", 4, []int{1}, "Show Name - S04E01"},
+		{"Show Name", 4, []int{3, 4}, "Show Name - S04E03E04"},
+		{" Show  Name ", 0, []int{9}, "Show Name - S00E09"},
 	}
 	for _, tt := range tests {
-		if got := renderTemplate(tt.template, tt.show, tt.season, tt.eps); got != tt.want {
-			t.Errorf("%q: want %q, got %q", tt.template, tt.want, got)
+		if got := renderEpisode(tt.show, tt.season, tt.eps); got != tt.want {
+			t.Errorf("%q: want %q, got %q", tt.show, tt.want, got)
 		}
 	}
 }

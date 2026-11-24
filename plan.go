@@ -61,7 +61,6 @@ var (
 	// seasonRangeRe marks a multi-season pack ("S01-S05", "Season 1-5"), which
 	// has no single season folder to move into.
 	seasonRangeRe = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}])(?:s|season[\s._-]*)[0-9]{1,2}[\s._-]*(?:-|–|to)[\s._-]*s?[0-9]{1,2}(?:[^\p{L}\p{N}]|$)`)
-	tokenRe       = regexp.MustCompile(`\{([^{}]*)\}`)
 
 	// siteTagRe strips one leading release-site tag. The chunk has no spaces
 	// and starts with "www." or ends in a listed TLD. Any dotted word is not
@@ -84,11 +83,6 @@ var (
 	// movie's own name and collide with it.
 	movieExtraRe = regexp.MustCompile(`(?i)\b(?:sample|trailer)\b`)
 	emptyPairRe  = regexp.MustCompile(`\s*(?:\(\s*\)|\[\s*\])`)
-)
-
-const (
-	defaultTemplate      = "{title} - S{season}E{episode}"
-	defaultMovieTemplate = "{title} ({year})"
 )
 
 // strongTokens start release metadata in a movie name; the first one after the
@@ -417,39 +411,6 @@ func showFromDir(dir string) string {
 	return normalizeShow(base)
 }
 
-// validateTemplate rejects templates that cannot produce a plain file name.
-// allowed lists the tokens the template may use.
-func validateTemplate(t string, allowed ...string) error {
-	if t == "" {
-		return errors.New("template must not be empty")
-	}
-	if strings.ContainsAny(t, `/\`) {
-		return errors.New("template must not contain path separators")
-	}
-	last := 0
-	for _, m := range tokenRe.FindAllStringSubmatchIndex(t, -1) {
-		if strings.ContainsAny(t[last:m[0]], "{}") {
-			return errors.New("malformed template")
-		}
-		tok := t[m[2]:m[3]]
-		ok := false
-		for _, a := range allowed {
-			if tok == a {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return fmt.Errorf("unknown template token {%s}", tok)
-		}
-		last = m[1]
-	}
-	if strings.ContainsAny(t[last:], "{}") {
-		return errors.New("malformed template")
-	}
-	return nil
-}
-
 func formatEpisodes(eps []int) string {
 	var b strings.Builder
 	for i, e := range eps {
@@ -461,28 +422,20 @@ func formatEpisodes(eps []int) string {
 	return b.String()
 }
 
-// renderTemplate substitutes tokens, then collapses whitespace.
-func renderTemplate(t, title string, season int, eps []int) string {
-	out := strings.NewReplacer(
-		"{title}", title,
-		"{season}", fmt.Sprintf("%02d", season),
-		"{episode}", formatEpisodes(eps),
-	).Replace(t)
+// renderEpisode renders "Title - S04E01", collapsing whitespace.
+func renderEpisode(title string, season int, eps []int) string {
+	out := fmt.Sprintf("%s - S%02dE%s", title, season, formatEpisodes(eps))
 	return strings.TrimSpace(spaceRe.ReplaceAllString(out, " "))
 }
 
-// renderMovie substitutes the movie tokens, drops the brackets the year left
-// empty, and collapses whitespace, so "{title} ({year})" gives "Jailer 2" when
-// the name has no year.
-func renderMovie(t, title string, year int) string {
-	yearText := ""
+// renderMovie renders "Title (2026)", or "Title" when the name has no year,
+// collapsing whitespace.
+func renderMovie(title string, year int) string {
+	out := title
 	if year > 0 {
-		yearText = strconv.Itoa(year)
+		out = fmt.Sprintf("%s (%d)", title, year)
 	}
-	out := strings.NewReplacer("{title}", title, "{year}", yearText).Replace(t)
-	out = emptyPairRe.ReplaceAllString(out, "")
-	out = spaceRe.ReplaceAllString(out, " ")
-	return strings.Trim(out, " -")
+	return strings.Trim(spaceRe.ReplaceAllString(out, " "), " -")
 }
 
 // invalidTarget returns a conflict reason when name cannot be written.
@@ -597,7 +550,7 @@ func planMovieFolders(targets []dirTarget, o options) ([]rename, []conflict, err
 		if o.title != "" {
 			title = o.title
 		}
-		name := renderMovie(o.template, title, m.year)
+		name := renderMovie(title, m.year)
 		if name == base {
 			continue
 		}
@@ -710,8 +663,8 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 		return dp, err
 	}
 
-	exts := make(map[string]bool, len(o.exts))
-	for _, e := range o.exts {
+	exts := make(map[string]bool, len(videoExts))
+	for _, e := range videoExts {
 		exts[e] = true
 	}
 
@@ -765,7 +718,7 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 			if o.title != "" {
 				title = o.title
 			}
-			v.target = renderMovie(o.template, title, m.year)
+			v.target = renderMovie(title, m.year)
 		case isEpisode:
 			if info.episodes == nil {
 				continue // an unsafe marker is skipped, never truncated
@@ -784,7 +737,7 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 			if o.seasonSet {
 				season = o.season
 			}
-			v.target = renderTemplate(o.template, show, season, info.episodes)
+			v.target = renderEpisode(show, season, info.episodes)
 		default:
 			continue
 		}
@@ -807,23 +760,21 @@ func planDir(dir string, names map[string]bool, o options) (dirPlan, error) {
 		return names == nil || names[scopeKey(v.name)]
 	}
 	sidecars := make([][]string, len(detected))
-	if o.sidecars {
-		for _, name := range rest {
-			best := -1
-			for i, v := range detected {
-				// Folded like scopeKey, so show.s01e01.srt belongs to
-				// Show.S01E01.mkv; the original suffix is kept by slicing name.
-				if len(name) <= len(v.stem) || name[len(v.stem)] != '.' || scopeKey(name[:len(v.stem)]) != scopeKey(v.stem) {
-					continue
-				}
-				if best < 0 || len(v.stem) > len(detected[best].stem) ||
-					(len(v.stem) == len(detected[best].stem) && inScope(v) && !inScope(detected[best])) {
-					best = i
-				}
+	for _, name := range rest {
+		best := -1
+		for i, v := range detected {
+			// Folded like scopeKey, so show.s01e01.srt belongs to
+			// Show.S01E01.mkv; the original suffix is kept by slicing name.
+			if len(name) <= len(v.stem) || name[len(v.stem)] != '.' || scopeKey(name[:len(v.stem)]) != scopeKey(v.stem) {
+				continue
 			}
-			if best >= 0 {
-				sidecars[best] = append(sidecars[best], name)
+			if best < 0 || len(v.stem) > len(detected[best].stem) ||
+				(len(v.stem) == len(detected[best].stem) && inScope(v) && !inScope(detected[best])) {
+				best = i
 			}
+		}
+		if best >= 0 {
+			sidecars[best] = append(sidecars[best], name)
 		}
 	}
 

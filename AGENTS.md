@@ -71,7 +71,7 @@ hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
    directories; new code belongs in `main.go`, `plan.go`, or `apply.go`.
 2. **Planning is read-only.** `planDir`, `planPaths`, `planMovieFolders`,
    `planShowFolders`, `detect`, `detectMovie`, `detectShowSeason`,
-   `renderTemplate`, and `renderMovie` must never touch the filesystem. Only
+   `renderEpisode`, and `renderMovie` must never touch the filesystem. Only
    `applyDir` writes — directly, or through `applyDirRenames` — and only after
    `runPlan` has confirmed `opt.apply` and zero conflicts.
 3. **Conflicts abort the whole invocation.** If any `dirPlan.conflicts` or
@@ -103,11 +103,11 @@ hard-code a version in `main.go`, `README.md`, or a badge: the tag and the
    season); inside its show folder, or with no title text, the target is
    `Season NN` in place. A multi-season range or a folder with no marker is left
    alone. The movie vocabulary is the
-   strong and weak token lists in `plan.go`. `--template` accepts `{title}`,
-   `{season}`, `{episode}` in TV mode and `{title}`, `{year}` in movie mode;
+   strong and weak token lists in `plan.go`. Output names are fixed
+   (`Title - S04E01`, `Title (2026)`); there is no template flag.
    `--title` forces the title in both modes, and `--season` is rejected with
    `--movies`. Videos are classified
-   solely by `options.exts`, and sidecars solely by video stem (never by
+   solely by `videoExts`, and sidecars solely by video stem (never by
    extension). Never special-case an individual filename — extend the tables in
    `plan_test.go` (`TestGoldenNames`, `TestGoldenMovieNames`) instead, and do
    not relax existing expected names.
