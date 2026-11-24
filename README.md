@@ -48,13 +48,20 @@ epfix --apply ~/Downloads/Show.S04              # rename
 epfix -r --apply --title "Jack Ryan" ~/Media/TV # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies --apply ~/Downloads/Movies       # rename movies
-epfix --movies --apply "~/Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
+epfix --movies --apply ~/"Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
                                                 # rename the folder and its file
 epfix --apply ~/Downloads/Show.Name.S04.1080p.WEB-DL
                                                 # rename it to Show Name - S04
 ```
 
 - Episodes (`SxxEyy`, `1x02`) become `{title} - S{season}E{episode}`.
+- Multi-episode files keep every episode as `S01E01E02`. A dash is a range
+  (`S01E01-E03`, `S01E01-03`, `1x01-02`, `1x01-1x02`); a dot or a repeated `E`
+  lists episodes (`S01E01.E02`, `S01E01E02`, `1x01.1x02`). A descending range
+  (`S01E05-E03`) or a `1x` run that changes season is left alone.
+- If `--template` puts `{title}` after `{episode}`, do not run epfix again on
+  files it already renamed: the title is no longer found before the marker, so
+  the second run takes the title from the folder name instead.
 - In TV mode, a season folder passed as a path argument is renamed to
   `Show Name - S01` in place; inside its show folder, or with no title text, it
   becomes `Season 01`. An episode-named folder counts as its season;

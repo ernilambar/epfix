@@ -2,6 +2,12 @@
 
 ## X.X.X - YYYY-MM-DD
 - Added: short flags `-a`, `-m`, `-t`, `-s`, `-e`, and `-V`
+- Added: multi-episode ranges such as `S01E01-E03` and `1x01-02`
+- Fixed: `--apply` after `--` triggered a rename
+- Fixed: two folders renamed to one target could partly apply
+- Fixed: sidecars renamed twice or left behind
+- Fixed: `--movies` renamed episode files and folders
+- Fixed: `-r` on a symlinked folder planned nothing
 
 ## 0.1.2 - 2026-11-14
 - Added: rename movie folders named as path arguments in `--movies` mode
