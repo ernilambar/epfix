@@ -45,7 +45,8 @@ GOARCH=arm64 go build -ldflags '-macos 15.0' -o epfix .
 ```sh
 epfix ~/Downloads/Show.S04                      # preview
 epfix --apply ~/Downloads/Show.S04              # rename
-epfix --apply --title "Jack Ryan" ~/Downloads/Show.S04 # force the series name
+epfix --apply --title "Jack Ryan" ~/Downloads/Show.S04
+                                                # force the series name
 epfix --apply ~/Downloads/Show.S04E01.1080p.mkv # one file and its sidecars
 epfix --movies --apply ~/Downloads/Movies       # rename movies
 epfix --movies --apply ~/"Movies/All We Imagine As Light (2024) [720p] [BluRay] [YTS.MX]"
@@ -54,7 +55,7 @@ epfix --apply ~/Downloads/Show.Name.S04.1080p.WEB-DL
                                                 # rename it to Show Name - S04
 ```
 
-- Episodes (`SxxEyy`, `1x02`) become `{title} - S{season}E{episode}`.
+- Episodes (`SxxEyy`, `1x02`) become `Show Name - S04E01`.
 - Multi-episode files keep every episode as `S01E01E02`. A dash is a range
   (`S01E01-E03`, `S01E01-03`, `1x01-02`, `1x01-1x02`); a dot or a repeated `E`
   lists episodes (`S01E01.E02`, `S01E01E02`, `1x01.1x02`). A descending range
@@ -65,11 +66,13 @@ epfix --apply ~/Downloads/Show.Name.S04.1080p.WEB-DL
   multi-season packs (`S01-S05`) and folders with no season marker are left
   alone. Only arguments are renamed, not nested folders. Files inside are
   renamed first.
-- With `--movies`, movies become `{title} ({year})`, or `{title}` without a
-  year. Episodes are left alone in this mode.
-- With `--movies`, a directory named as a path argument is renamed with the
-  same template when its own name looks like a release name. Only arguments are
-  renamed, not nested folders. Files inside are renamed first.
+- With `--movies`, movies become `Movie (2026)`, or `Movie` without a year.
+  Episodes are left alone in this mode.
+- With `--movies`, a directory named as a path argument is renamed the same way
+  when its own name looks like a release name. Only arguments are renamed, not
+  nested folders. Files inside are renamed first.
+- Only the files directly inside each path are renamed; subfolders are not
+  scanned. Pass each season folder, e.g. `Show/*/`.
 - Sidecars such as subtitles are renamed with their video.
 - Any conflict aborts the whole run before a file moves. There is no undo, so
   review the preview before `--apply`.
